@@ -1,0 +1,34 @@
+# --- secrets (never commit) ---
+.env
+.env.*
+!.env.example
+
+# --- Python ---
+__pycache__/
+*.pyc
+.venv/
+ZAFVENV/
+
+# --- generated / temporary ---
+build/
+logs/
+reports/
+
+# --- site data pulled from WordPress (regenerable; delete these two lines if you WANT them in Git) ---
+knowledge/site/
+knowledge/articles/
+
+# --- your inbox content (keep only the samples) ---
+inbox/products/*
+!inbox/products/_sample/
+inbox/articles/*
+!inbox/articles/_sample.md
+result.json
+*.result.json
+
+# --- editors / OS ---
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+.DS_Store
