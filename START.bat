@@ -36,6 +36,11 @@ echo  13  Apply SEO answer (proposals\seo_answer.csv)
 echo.
 echo   9  Diagnose connection problems
 echo  14  OPEN THE WEB PANEL (review/approve in the browser instead of Excel)
+echo  --- E. Automation ---
+echo  15  Run the read-only routine now (check, sync, export, audit, report)
+echo  16  Install weekly schedule on this PC (edit day/time in schedule_install.ps1)
+echo  17  Remove the schedule
+echo.
 echo   0  Exit
 echo.
 set "c="
@@ -54,6 +59,9 @@ if "%c%"=="11" python -m agent.cli applylinks --go
 if "%c%"=="12" python -m agent.cli seotodo
 if "%c%"=="13" python -m agent.cli applyseo --go
 if "%c%"=="14" python -m agent.cli panel
+if "%c%"=="15" python -m agent.cli routine
+if "%c%"=="16" powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0schedule_install.ps1"
+if "%c%"=="17" powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0schedule_remove.ps1"
 if "%c%"=="0" exit /b 0
 echo.
 pause

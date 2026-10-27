@@ -115,3 +115,4 @@ def audit():
     for sc, a, iss in rows[:5]:
         print(f"  ({sc}) {a.get('title')} [id {a.get('id')}]")
     print(f"\nFull list: reports\\seo_audit_{ts}.csv (open in Excel) and .md")
+    return {"n": len(arts), "codes": dict(codes), "worst": [(a.get("id"), a.get("title"), sc) for sc, a, _ in rows[:5]]}

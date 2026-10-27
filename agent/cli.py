@@ -230,7 +230,7 @@ def main():
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     ap = argparse.ArgumentParser(prog="agent")
-    ap.add_argument("cmd", choices=["check", "diagnose", "products", "articles", "sync", "newterms", "export", "audit", "style", "linkplan", "applylinks", "seotodo", "applyseo", "panel"])
+    ap.add_argument("cmd", choices=["check", "diagnose", "products", "articles", "sync", "newterms", "export", "audit", "style", "linkplan", "applylinks", "seotodo", "applyseo", "panel", "routine"])
     ap.add_argument("path", nargs="?", help="optional: one product folder / one article file")
     ap.add_argument("--go", action="store_true", help="really send to the site (as DRAFT). Without it: dry run.")
     ap.add_argument("--all", action="store_true", help="export: include drafts/private, not only published")
@@ -246,6 +246,9 @@ def main():
         from . import proposals as pr
         {"linkplan": lambda: pr.link_plan(), "applylinks": lambda: pr.apply_links(a.go, a.path),
          "seotodo": lambda: pr.seo_todo(), "applyseo": lambda: pr.apply_seo(a.go, a.path)}[a.cmd]()
+    elif a.cmd == "routine":
+        from . import routine
+        sys.exit(0 if routine.run() else 1)
     elif a.cmd == "panel":
         from . import panel
         panel.serve()
