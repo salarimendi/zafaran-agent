@@ -100,6 +100,16 @@ def anchors_of(a):
     return out
 
 
+def _refresh():
+    """Keep knowledge/articles identical to the site after we changed it."""
+    try:
+        from .export import export_articles
+        print("\nRefreshing the local article copy...")
+        export_articles()
+    except Exception as e:
+        print(f"(auto re-export failed: {e}; run menu 3)")
+
+
 # ---------- 1. link plan ----------
 def link_plan():
     arts = read_articles()
@@ -217,11 +227,11 @@ def apply_links(go, path=None):
         print(f"\n== {rs[0]['source_title']} (id {sid}, {cur.get('status')})")
         done = 0
         for r in rs:
-            if r.get("source_modified") and r["source_modified"] != cur.get("modified"):
-                print(f"   SKIP '{r['anchor']}': article changed since export ({cur.get('modified')}) - re-export (menu 3) and re-plan")
-                continue
             if f'href="{r["target_url"]}"' in raw:
-                print(f"   SKIP '{r['anchor']}': already links to the target")
+                print(f"   SKIP '{r['anchor']}': this article already links to the target (probably applied before)")
+                continue
+            if r.get("source_modified") and r["source_modified"] != cur.get("modified"):
+                print(f"   SKIP '{r['anchor']}': article was edited after the export ({cur.get('modified')}) - re-export (menu 3) and re-plan")
                 continue
             new, snip = insert_link(raw, r["anchor"], r["target_url"])
             if new is None:
@@ -251,6 +261,7 @@ def apply_links(go, path=None):
         except StepError as e:
             print(f"   FAILED post {sid}: {e}")
     print(f"\nBackups of the original HTML: backups\\posts\\*-{ts}.html (WordPress also keeps revisions).")
+    _refresh()
 
 
 # ---------- 3. SEO to-do ----------
@@ -372,3 +383,4 @@ def apply_seo(go, path=None):
         except StepError as e:
             print(f"   FAILED id {pid}: {e}")
     print(f"\nOld values saved in backups\\seo\\{ts}.json")
+    _refresh()

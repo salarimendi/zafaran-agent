@@ -35,6 +35,7 @@ echo  12  SEO to-do list + prompt for a chat model
 echo  13  Apply SEO answer (proposals\seo_answer.csv)
 echo.
 echo   9  Diagnose connection problems
+echo  14  OPEN THE WEB PANEL (review/approve in the browser instead of Excel)
 echo   0  Exit
 echo.
 set "c="
@@ -52,6 +53,7 @@ if "%c%"=="10" python -m agent.cli linkplan
 if "%c%"=="11" python -m agent.cli applylinks --go
 if "%c%"=="12" python -m agent.cli seotodo
 if "%c%"=="13" python -m agent.cli applyseo --go
+if "%c%"=="14" python -m agent.cli panel
 if "%c%"=="0" exit /b 0
 echo.
 pause
