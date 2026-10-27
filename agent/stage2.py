@@ -1,5 +1,7 @@
-"""Products + articles -> WordPress as DRAFT. Dry run by default. Never creates categories/tags."""
+"""Products + articles -> WordPress. New items are DRAFT. Dry run by default.
+Never creates categories/tags. Never touches an existing item unless `update: true` is written in its file."""
 import json
+import re
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -7,24 +9,31 @@ import yaml
 
 from . import images as img
 from . import seo
-from .common import (StepError, as_list, confirm, ensure, log_action, md, num, slug_error)
+from .common import StepError, as_list, confirm, ensure, log_action, md, num, slug_error
 from .config import ROOT, load_config
-from .site import expected_url, resolve_term, slug_in_use
+from .site import expected_url, resolve_term, similar_names, slug_in_use
 from .wp_client import WPClient
 
 INBOX_P = ROOT / "inbox" / "products"
 INBOX_A = ROOT / "inbox" / "articles"
 BUILD = ROOT / "build"
 IMG_EXT = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"}
+SKIP_HINT = ("To change it: add `update: true`. To create a NEW item: use a new slug (and sku) and delete the result file.")
 
 
 def key_of(s):
-    import re
     return re.sub(r"[^a-z0-9]+", "-", str(s).lower()).strip("-") or "item"
 
 
 def site_host(cfg):
     return urlparse(cfg.site_url).netloc
+
+
+def read_json(p):
+    try:
+        return json.loads(Path(p).read_text(encoding="utf-8"))
+    except Exception:
+        return None
 
 
 def yoast_meta(focus, seo_title, desc):
@@ -36,6 +45,10 @@ def yoast_meta(focus, seo_title, desc):
     if desc:
         m["_yoast_wpseo_metadesc"] = desc
     return m
+
+
+def plain(s):
+    return " ".join(re.sub(r"<[^>]+>", " ", s or "").split())
 
 
 def upload_image(c, path: Path, alt: str, title: str):
@@ -58,15 +71,13 @@ def prepare_images(files, key, base_alt):
 
 
 def term_specs(kind, d):
-    if kind == "product":
-        return ([("product_cat", v) for v in as_list(d.get("categories") or d.get("category"))]
-                + [("product_tag", v) for v in as_list(d.get("tags"), split=True)])
-    return ([("category", v) for v in as_list(d.get("categories") or d.get("category"))]
-            + [("post_tag", v) for v in as_list(d.get("tags"), split=True)])
+    cat, tag = ("product_cat", "product_tag") if kind == "product" else ("category", "post_tag")
+    return ([(cat, v) for v in as_list(d.get("categories") or d.get("category"))]
+            + [(tag, v) for v in as_list(d.get("tags"), split=True)])
 
 
-def online_checks(c, kind, d, report):
-    """Terms must exist, slug must be free. Returns (term_ids, ok). report=True prints findings (dry run)."""
+def online_checks(c, kind, d, report, self_id=None):
+    """Terms must exist; slug/SKU must be free (except for the item being updated). -> (term_ids, ok)"""
     ids, ok = {}, True
     for tax, v in term_specs(kind, d):
         try:
@@ -76,16 +87,49 @@ def online_checks(c, kind, d, report):
         except StepError as e:
             ok = False
             print(f"    !! {e}")
-    used = slug_in_use(c, kind, d["slug"])
+    used = [u for u in slug_in_use(c, kind, d["slug"]) if u[0] != self_id]
     if used:
         ok = False
-        print(f"    !! slug '{d['slug']}' is already used by: {used}")
+        print(f"    !! slug '{d['slug']}' already used by {used}  (to modify an existing item use `update: true`)")
     elif report:
         print(f"    slug '{d['slug']}': free")
+    if kind == "product" and d.get("sku"):
+        ex = [i for i in ensure(c.get("wc/v3/products", auth="wc", params={"sku": str(d["sku"])}), "check SKU")
+              if i["id"] != self_id]
+        if ex:
+            ok = False
+            print(f"    !! SKU '{d['sku']}' already used by product id {ex[0]['id']} ({ex[0].get('status')}) "
+                  f"- will NOT be created (to modify it use `update: true`)")
+        elif report:
+            print(f"    sku '{d['sku']}': free")
+    for i, name, r in similar_names(kind, d.get("name") or d.get("title"), self_id):
+        print(f"    WARN: very similar existing {kind} id {i}: '{name}' (similarity {r}) - make sure this is not a duplicate")
     if report:
         u = expected_url(kind, d["slug"])
         print(f"    URL after publishing: {u or '(run sync.bat once to learn the permalink pattern)'}")
     return ids, ok
+
+
+def show_diff(lines, what):
+    if lines:
+        print(f"    CHANGES to {what}:")
+        for ln in lines:
+            print(f"      - {ln}")
+    else:
+        print(f"    no differences from the live {what}")
+
+
+def cmp_lines(rows):
+    out = []
+    for label, old, new, long in rows:
+        if new is None:
+            continue
+        if long:
+            if plain(old) != plain(new):
+                out.append(f"{label}: changed ({len(plain(old))} -> {len(plain(new))} chars)")
+        elif str(old or "") != str(new):
+            out.append(f"{label}: '{old}' -> '{new}'")
+    return out
 
 
 # ---------- products ----------
@@ -94,28 +138,76 @@ def load_product(folder: Path):
     if not f.exists():
         raise StepError("product.yaml not found")
     d = yaml.safe_load(f.read_text(encoding="utf-8")) or {}
-    if not d.get("name"):
-        raise StepError("'name' is required in product.yaml")
+    for k in ("name",):
+        if not d.get(k):
+            raise StepError(f"'{k}' is required in product.yaml")
     if not num(d.get("price")):
         raise StepError("'price' is required in product.yaml")
     if slug_error(d.get("slug")):
         raise StepError(slug_error(d.get("slug")))
     files = sorted(p for p in folder.iterdir() if p.suffix.lower() in IMG_EXT)
-    if not files:
+    upd = bool(d.get("update"))
+    if (not upd or d.get("replace_images")) and not files:
         raise StepError("no images in the folder")
     return d, files
+
+
+def product_payload(d, desc_html, term_ids, image_ids, update):
+    ym = yoast_meta(d.get("focus_keyword"), d.get("seo_title"), d.get("meta_description"))
+    p = {"name": d["name"], "slug": d["slug"], "regular_price": num(d["price"]),
+         "description": desc_html, "short_description": md(d.get("short_description", "")),
+         "meta_data": [{"key": k, "value": v} for k, v in ym.items()]}
+    if not update:
+        p.update(type="simple", status="draft")
+    if image_ids:
+        p["images"] = [{"id": i} for i in image_ids]
+    if num(d.get("sale_price")):
+        p["sale_price"] = num(d["sale_price"])
+    if d.get("sku"):
+        p["sku"] = str(d["sku"])
+    if num(d.get("stock_quantity")):
+        p.update(manage_stock=True, stock_quantity=int(float(num(d["stock_quantity"]))))
+    if term_ids.get("product_cat"):
+        p["categories"] = [{"id": i} for i in term_ids["product_cat"]]
+    if term_ids.get("product_tag"):
+        p["tags"] = [{"id": i} for i in term_ids["product_tag"]]
+    if d.get("attributes"):
+        p["attributes"] = [{"name": k, "visible": True, "variation": False, "options": [str(v)]}
+                           for k, v in d["attributes"].items()]
+    return p, ym
+
+
+def product_diff(cur, p, ym):
+    curm = {m.get("key"): m.get("value") for m in cur.get("meta_data", [])}
+    rows = [("name", cur.get("name"), p.get("name"), False), ("slug", cur.get("slug"), p.get("slug"), False),
+            ("price", cur.get("regular_price"), p.get("regular_price"), False),
+            ("sale_price", cur.get("sale_price"), p.get("sale_price"), False),
+            ("sku", cur.get("sku"), p.get("sku"), False),
+            ("description", cur.get("description"), p.get("description"), True),
+            ("short_description", cur.get("short_description"), p.get("short_description"), True)]
+    L = cmp_lines(rows)
+    for key, ids in (("categories", "categories"), ("tags", "tags")):
+        if key in p:
+            old, new = {x["id"] for x in cur.get(key, [])}, {x["id"] for x in p[key]}
+            if old != new:
+                L.append(f"{key}: ids {sorted(old)} -> {sorted(new)}")
+    for k, v in ym.items():
+        if curm.get(k) != v:
+            L.append(f"{k}: '{curm.get(k)}' -> '{v}'")
+    if "images" in p:
+        L.append(f"images: will be REPLACED by {len(p['images'])} new image(s)")
+    return L
 
 
 def run_products(go, only=None):
     cfg = load_config()
     if only:
-        p = Path(only)
-        folders = [p if p.is_absolute() or p.exists() else INBOX_P / only]
+        pth = Path(only)
+        folders = [pth if pth.is_absolute() or pth.exists() else INBOX_P / only]
     else:
-        folders = [p for p in sorted(INBOX_P.glob("*"))
-                   if p.is_dir() and not p.name.startswith("_") and not (p / "result.json").exists()]
+        folders = [p for p in sorted(INBOX_P.glob("*")) if p.is_dir() and not p.name.startswith("_")]
     if not folders:
-        print(f"No pending product folders in {INBOX_P} (folders starting with _ and already-sent ones are skipped).")
+        print(f"No product folders in {INBOX_P}.")
         return
     print(f"{'SENDING' if go else 'DRY RUN'}: {len(folders)} product folder(s)\n")
     plans = []
@@ -123,78 +215,78 @@ def run_products(go, only=None):
         print(f"== {folder.name}")
         try:
             d, files = load_product(folder)
-            imgs = prepare_images(files, key_of(d["slug"]), d.get("image_alt") or d["name"])
+            res = read_json(folder / "result.json")
+            pid = None
+            if res and not d.get("update"):
+                print(f"    already sent as product id {res.get('id')} (slug {res.get('slug')}) - SKIPPED. {SKIP_HINT}")
+                continue
+            if d.get("update"):
+                pid = d.get("id") or (res or {}).get("id")
+                if not pid:
+                    raise StepError("`update: true` needs result.json or `id:` of the existing product")
+                print(f"    UPDATE MODE for existing product id {pid}")
+            imgs = prepare_images(files, key_of(d["slug"]), d.get("image_alt") or d["name"]) if (not pid or d.get("replace_images")) else []
             desc_html = md(d.get("description", ""))
             print(f"    name={d['name']} price={num(d['price'])} sku={d.get('sku', '-')} slug={d['slug']}")
             for w in seo.lint("product", d["name"], d.get("meta_description", ""), d.get("focus_keyword", ""),
                               desc_html, site_host(cfg)):
                 print(f"    SEO: {w}")
-            plans.append((folder, d, imgs, desc_html))
+            plans.append((folder, d, imgs, desc_html, pid))
         except Exception as e:
             print(f"    SKIPPED: {e}")
+    if not plans:
+        print("\nNothing to do.")
+        return
     c = None
-    if plans:
-        try:
-            c = WPClient(cfg)
-            c.detect_mode()
-        except Exception as e:
-            print(f"(online checks unavailable: {e})")
+    try:
+        c = WPClient(cfg)
+        c.detect_mode()
+    except Exception as e:
+        print(f"(online checks unavailable: {e})")
     if not go:
         if c:
             print("\nOnline checks (read-only):")
-            for folder, d, _i, _h in plans:
+            for folder, d, imgs, desc_html, pid in plans:
                 print(f"  [{folder.name}]")
                 try:
-                    online_checks(c, "product", d, True)
+                    tids, _ = online_checks(c, "product", d, True, self_id=pid)
+                    if pid:
+                        cur = ensure(c.get(f"wc/v3/products/{pid}", auth="wc"), "read existing product")
+                        p, ym = product_payload(d, desc_html, tids, [0] if imgs else [], True)
+                        if imgs:
+                            p["images"] = [{"id": 0}] * len(imgs)
+                        show_diff(product_diff(cur, p, ym), "product")
                 except Exception as e:
                     print(f"    (checks failed: {e})")
-        print("\nDry run finished. Nothing was sent. Run run_send.bat to send as DRAFT.")
+        print("\nDry run finished. Nothing was sent. Run run_send.bat to send.")
         return
-    if not plans or not confirm(len(plans), "product(s) as DRAFT"):
+    n_new = sum(1 for p in plans if not p[4])
+    if not confirm(len(plans), f"product(s) ({n_new} new as DRAFT, {len(plans) - n_new} UPDATE of existing)"):
         print("Cancelled.")
         return
-    for folder, d, imgs, desc_html in plans:
+    for folder, d, imgs, desc_html, pid in plans:
         print(f"\n>> {folder.name}")
         ids = []
         try:
-            if d.get("sku"):
-                ex = ensure(c.get("wc/v3/products", auth="wc", params={"sku": str(d["sku"])}), "check SKU")
-                if ex:
-                    raise StepError(f"SKU {d['sku']} already exists (product id {ex[0]['id']}) - skipped")
-            term_ids, ok = online_checks(c, "product", d, False)
+            term_ids, ok = online_checks(c, "product", d, False, self_id=pid)
             if not ok:
-                raise StepError("fix the problems above (nothing was uploaded)")
-            for p, a in imgs:  # images last: nothing is orphaned if the checks above fail
-                ids.append(upload_image(c, p, a, d["name"]))
-            ym = yoast_meta(d.get("focus_keyword"), d.get("seo_title"), d.get("meta_description"))
-            payload = {
-                "name": d["name"], "slug": d["slug"], "type": "simple", "status": "draft",
-                "regular_price": num(d["price"]),
-                "description": desc_html,
-                "short_description": md(d.get("short_description", "")),
-                "images": [{"id": i} for i in ids],
-                "meta_data": [{"key": k, "value": v} for k, v in ym.items()],
-            }
-            if num(d.get("sale_price")):
-                payload["sale_price"] = num(d["sale_price"])
-            if d.get("sku"):
-                payload["sku"] = str(d["sku"])
-            if num(d.get("stock_quantity")):
-                payload.update(manage_stock=True, stock_quantity=int(float(num(d["stock_quantity"]))))
-            if term_ids.get("product_cat"):
-                payload["categories"] = [{"id": i} for i in term_ids["product_cat"]]
-            if term_ids.get("product_tag"):
-                payload["tags"] = [{"id": i} for i in term_ids["product_tag"]]
-            if d.get("attributes"):
-                payload["attributes"] = [{"name": k, "visible": True, "variation": False, "options": [str(v)]}
-                                         for k, v in d["attributes"].items()]
-            res = ensure(c.request("POST", "wc/v3/products", auth="wc", json=payload), "create product")
+                raise StepError("fix the problems above (nothing was changed or uploaded)")
+            for p_, a in imgs:
+                ids.append(upload_image(c, p_, a, d["name"]))
+            payload, ym = product_payload(d, desc_html, term_ids, ids, bool(pid))
+            if pid:
+                cur = ensure(c.get(f"wc/v3/products/{pid}", auth="wc"), "read existing product")
+                show_diff(product_diff(cur, payload, ym), "product")
+                res = ensure(c.request("POST", f"wc/v3/products/{pid}", auth="wc", json=payload), "update product")
+                print(f"   OK product id={res['id']} UPDATED (status unchanged: {res.get('status')}, slug={res.get('slug')})")
+                log_action("product_update", {"id": res["id"], "name": d["name"], "slug": d["slug"]})
+            else:
+                res = ensure(c.request("POST", "wc/v3/products", auth="wc", json=payload), "create product")
+                print(f"   OK product id={res['id']} (draft, slug={res.get('slug')})")
+                (folder / "result.json").write_text(json.dumps({"id": res["id"], "slug": res.get("slug")}), encoding="utf-8")
+                log_action("product_draft", {"id": res["id"], "name": d["name"], "slug": d["slug"]})
             saved = {m.get("key") for m in res.get("meta_data", [])}
-            print(f"   OK product id={res['id']} (draft, slug={res.get('slug')})")
             print("   Yoast fields:", "saved" if set(ym) <= saved else f"NOT confirmed {sorted(set(ym) - saved)} - check in editor")
-            print(f"   URL after publishing: {expected_url('product', d['slug']) or 'see site after publish'}")
-            (folder / "result.json").write_text(json.dumps({"id": res["id"], "slug": res.get("slug")}), encoding="utf-8")
-            log_action("product_draft", {"id": res["id"], "name": d["name"], "slug": d["slug"]})
         except StepError as e:
             print(f"   FAILED: {e}")
             if ids:
@@ -218,16 +310,48 @@ def load_article(f: Path):
     return meta, t[end + 4:].strip()
 
 
+def article_payload(m, body_html, term_ids, update):
+    ym = yoast_meta(m.get("focus_keyword"), m.get("seo_title"), m.get("meta_description"))
+    p = {"title": m["title"], "slug": m["slug"]}
+    if not update:
+        p["status"] = "draft"
+    if not update or m.get("replace_content"):
+        p["content"] = body_html
+    if m.get("excerpt"):
+        p["excerpt"] = m["excerpt"]
+    if term_ids.get("category"):
+        p["categories"] = term_ids["category"]
+    if term_ids.get("post_tag"):
+        p["tags"] = term_ids["post_tag"]
+    if ym:
+        p["meta"] = ym
+    return p, ym
+
+
+def article_diff(cur, p, ym):
+    L = cmp_lines([("title", (cur.get("title") or {}).get("raw"), p.get("title"), False),
+                   ("slug", cur.get("slug"), p.get("slug"), False),
+                   ("excerpt", (cur.get("excerpt") or {}).get("raw"), p.get("excerpt"), False),
+                   ("content", (cur.get("content") or {}).get("raw"), p.get("content"), True)])
+    for key in ("categories", "tags"):
+        if key in p and set(cur.get(key, [])) != set(p[key]):
+            L.append(f"{key}: ids {sorted(cur.get(key, []))} -> {sorted(p[key])}")
+    curm = cur.get("meta") if isinstance(cur.get("meta"), dict) else {}
+    for k, v in ym.items():
+        if curm.get(k) != v:
+            L.append(f"{k}: '{curm.get(k)}' -> '{v}'")
+    return L
+
+
 def run_articles(go, only=None):
     cfg = load_config()
     if only:
-        p = Path(only)
-        files = [p if p.is_absolute() or p.exists() else INBOX_A / only]
+        pth = Path(only)
+        files = [pth if pth.is_absolute() or pth.exists() else INBOX_A / only]
     else:
-        files = [p for p in sorted(INBOX_A.glob("*.md"))
-                 if not p.name.startswith("_") and not p.with_suffix(".result.json").exists()]
+        files = [p for p in sorted(INBOX_A.glob("*.md")) if not p.name.startswith("_")]
     if not files:
-        print(f"No pending articles in {INBOX_A} (files starting with _ and already-sent ones are skipped).")
+        print(f"No articles in {INBOX_A}.")
         return
     print(f"{'SENDING' if go else 'DRY RUN'}: {len(files)} article(s)\n")
     plans = []
@@ -235,9 +359,20 @@ def run_articles(go, only=None):
         print(f"== {f.name}")
         try:
             m, body = load_article(f)
+            res = read_json(f.with_suffix(".result.json"))
+            pid = None
+            if res and not m.get("update"):
+                print(f"    already sent as post id {res.get('id')} (slug {res.get('slug')}) - SKIPPED. {SKIP_HINT}")
+                continue
+            if m.get("update"):
+                pid = m.get("id") or (res or {}).get("id")
+                if not pid:
+                    raise StepError("`update: true` needs the .result.json or `id:` of the existing post")
+                print(f"    UPDATE MODE for existing post id {pid} "
+                      f"({'content WILL be replaced' if m.get('replace_content') else 'content untouched; set replace_content: true to replace'})")
             body_html = md(body)
             imgs = []
-            if m.get("image"):
+            if m.get("image") and (not pid or m.get("replace_image")):
                 src = f.parent / str(m["image"])
                 if not src.exists():
                     raise StepError(f"featured image not found: {src}")
@@ -248,54 +383,58 @@ def run_articles(go, only=None):
             for w in seo.lint("article", m["title"], m.get("meta_description", ""), m.get("focus_keyword", ""),
                               body_html, site_host(cfg)):
                 print(f"    SEO: {w}")
-            plans.append((f, m, body_html, imgs))
+            plans.append((f, m, body_html, imgs, pid))
         except Exception as e:
             print(f"    SKIPPED: {e}")
+    if not plans:
+        print("\nNothing to do.")
+        return
     c = None
-    if plans:
-        try:
-            c = WPClient(cfg)
-            c.detect_mode()
-        except Exception as e:
-            print(f"(online checks unavailable: {e})")
+    try:
+        c = WPClient(cfg)
+        c.detect_mode()
+    except Exception as e:
+        print(f"(online checks unavailable: {e})")
     if not go:
         if c:
             print("\nOnline checks (read-only):")
-            for f, m, _b, _i in plans:
+            for f, m, body_html, imgs, pid in plans:
                 print(f"  [{f.name}]")
                 try:
-                    online_checks(c, "article", m, True)
+                    tids, _ = online_checks(c, "article", m, True, self_id=pid)
+                    if pid:
+                        cur = ensure(c.get(f"wp/v2/posts/{pid}", params={"context": "edit"}), "read existing post")
+                        p, ym = article_payload(m, body_html, tids, True)
+                        show_diff(article_diff(cur, p, ym), "post")
                 except Exception as e:
                     print(f"    (checks failed: {e})")
-        print("\nDry run finished. Nothing was sent. Run run_send.bat to send as DRAFT.")
+        print("\nDry run finished. Nothing was sent. Run run_send.bat to send.")
         return
-    if not plans or not confirm(len(plans), "article(s) as DRAFT"):
+    n_new = sum(1 for p in plans if not p[4])
+    if not confirm(len(plans), f"article(s) ({n_new} new as DRAFT, {len(plans) - n_new} UPDATE of existing)"):
         print("Cancelled.")
         return
-    for f, m, body_html, imgs in plans:
+    for f, m, body_html, imgs, pid in plans:
         print(f"\n>> {f.name}")
         try:
-            term_ids, ok = online_checks(c, "article", m, False)
+            term_ids, ok = online_checks(c, "article", m, False, self_id=pid)
             if not ok:
-                raise StepError("fix the problems above (nothing was uploaded)")
-            payload = {"title": m["title"], "slug": m["slug"], "content": body_html, "status": "draft"}
-            if m.get("excerpt"):
-                payload["excerpt"] = m["excerpt"]
-            if term_ids.get("category"):
-                payload["categories"] = term_ids["category"]
-            if term_ids.get("post_tag"):
-                payload["tags"] = term_ids["post_tag"]
+                raise StepError("fix the problems above (nothing was changed or uploaded)")
+            payload, ym = article_payload(m, body_html, term_ids, bool(pid))
             if imgs:
                 payload["featured_media"] = upload_image(c, imgs[0][0], imgs[0][1], m["title"])
-            ym = yoast_meta(m.get("focus_keyword"), m.get("seo_title"), m.get("meta_description"))
-            if ym:
-                payload["meta"] = ym
-            res = ensure(c.request("POST", "wp/v2/posts", auth="wp", json=payload), "create post")
+            if pid:
+                cur = ensure(c.get(f"wp/v2/posts/{pid}", params={"context": "edit"}), "read existing post")
+                show_diff(article_diff(cur, payload, ym), "post")
+                res = ensure(c.request("POST", f"wp/v2/posts/{pid}", auth="wp", json=payload), "update post")
+                print(f"   OK post id={res['id']} UPDATED (status unchanged: {res.get('status')}, slug={res.get('slug')})")
+                log_action("article_update", {"id": res["id"], "title": m["title"], "slug": m["slug"]})
+            else:
+                res = ensure(c.request("POST", "wp/v2/posts", auth="wp", json=payload), "create post")
+                print(f"   OK post id={res['id']} (draft, slug={res.get('slug')})")
+                f.with_suffix(".result.json").write_text(json.dumps({"id": res["id"], "slug": res.get("slug")}), encoding="utf-8")
+                log_action("article_draft", {"id": res["id"], "title": m["title"], "slug": m["slug"]})
             got = res.get("meta") or {}
-            print(f"   OK post id={res['id']} (draft, slug={res.get('slug')})")
             print("   Yoast fields:", "saved" if all(got.get(k) == v for k, v in ym.items()) else "NOT confirmed - check in the editor")
-            print(f"   URL after publishing: {expected_url('post', m['slug']) or 'see site after publish'}")
-            f.with_suffix(".result.json").write_text(json.dumps({"id": res["id"], "slug": res.get("slug")}), encoding="utf-8")
-            log_action("article_draft", {"id": res["id"], "title": m["title"], "slug": m["slug"]})
         except StepError as e:
             print(f"   FAILED: {e}")

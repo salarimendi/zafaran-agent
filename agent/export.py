@@ -50,7 +50,7 @@ def export_articles(include_all=False):
         key = re.sub(r"[^a-z0-9]+", "-", slug.lower()).strip("-")[:60]
         fname = f"{p['id']}-{key}.md" if key else f"{p['id']}.md"
         title = html.unescape((p.get("title") or {}).get("rendered", ""))
-        fm = {"title": title, "slug": slug, "url": p.get("link", ""), "status": p.get("status", ""),
+        fm = {"id": p["id"], "title": title, "slug": slug, "url": p.get("link", ""), "status": p.get("status", ""),
               "date": p.get("date", ""), "modified": p.get("modified", ""),
               "categories": [cats.get(i, str(i)) for i in p.get("categories", [])],
               "tags": [tags.get(i, str(i)) for i in p.get("tags", [])],

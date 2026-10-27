@@ -4,7 +4,7 @@ import html
 import json
 from collections import Counter
 from datetime import datetime
-from difflib import get_close_matches
+from difflib import SequenceMatcher, get_close_matches
 from urllib.parse import unquote
 
 import requests
@@ -109,6 +109,22 @@ def expected_url(kind, slug):
         return None
     best, n = pref.most_common(1)[0]
     return f"{best}/{slug}/" if n / total >= 0.8 else None
+
+
+def similar_names(kind, text, self_id=None, cutoff=0.85):
+    """Names/titles in the last sync that look like `text` (warning only)."""
+    snap = load_snapshot()
+    if not snap:
+        return []
+    items, key = (snap["products"], "name") if kind == "product" else (snap["posts"], "title")
+    out = []
+    for it in items:
+        if self_id and it["id"] == self_id:
+            continue
+        r = SequenceMatcher(None, norm(text), norm(it[key])).ratio()
+        if r >= cutoff:
+            out.append((it["id"], it[key], round(r, 2)))
+    return out
 
 
 # ---------- sync ----------

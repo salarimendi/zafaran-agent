@@ -229,7 +229,7 @@ def main():
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     ap = argparse.ArgumentParser(prog="agent")
-    ap.add_argument("cmd", choices=["check", "diagnose", "products", "articles", "sync", "newterms", "export"])
+    ap.add_argument("cmd", choices=["check", "diagnose", "products", "articles", "sync", "newterms", "export", "audit", "style", "linkplan", "applylinks", "seotodo", "applyseo"])
     ap.add_argument("path", nargs="?", help="optional: one product folder / one article file")
     ap.add_argument("--go", action="store_true", help="really send to the site (as DRAFT). Without it: dry run.")
     ap.add_argument("--all", action="store_true", help="export: include drafts/private, not only published")
@@ -241,6 +241,16 @@ def main():
     elif a.cmd == "sync":
         from . import site
         site.sync()
+    elif a.cmd in ("linkplan", "applylinks", "seotodo", "applyseo"):
+        from . import proposals as pr
+        {"linkplan": lambda: pr.link_plan(), "applylinks": lambda: pr.apply_links(a.go, a.path),
+         "seotodo": lambda: pr.seo_todo(), "applyseo": lambda: pr.apply_seo(a.go, a.path)}[a.cmd]()
+    elif a.cmd == "audit":
+        from . import audit
+        audit.audit()
+    elif a.cmd == "style":
+        from . import style
+        style.build()
     elif a.cmd == "export":
         from . import export
         export.export_articles(a.all)

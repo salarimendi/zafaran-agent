@@ -32,3 +32,7 @@ result.json
 Thumbs.db
 desktop.ini
 .DS_Store
+
+# --- work files of the proposal workflows ---
+proposals/
+backups/
