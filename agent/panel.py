@@ -90,7 +90,7 @@ def run(fn, yes=False):
 
 
 def actions():
-    from . import audit, cli, export, site, stage2, style
+    from . import ai, audit, cli, export, llm, site, stage2, style
     return {  # name: (label, callable, needs_confirm)
         "check": ("بررسی اتصال", cli.check, False), "diagnose": ("عیب‌یابی اتصال", cli.diagnose, False),
         "sync": ("همگام‌سازی سایت", site.sync, False), "export": ("خروجی مقاله‌ها", export.export_articles, False),
@@ -98,6 +98,11 @@ def actions():
         "linkplan": ("ساخت پیشنهاد لینک‌دهی", pr.link_plan, False), "seotodo": ("فهرست و پرامپت سئو", pr.seo_todo, False),
         "inbox_dry": ("پیش‌نمایش محصول و مقاله", lambda: (stage2.run_products(False), print(), stage2.run_articles(False)), False),
         "inbox_send": ("ارسال محصول و مقاله", lambda: (stage2.run_products(True), print(), stage2.run_articles(True)), True),
+        "ai_test": ("اتصال به هوش مصنوعی", llm.ping, False),
+        "ai_seo_est": ("برآورد هزینهٔ AI برای سئو", lambda: ai.ai_seo(False), False),
+        "ai_seo": ("پر کردن سئو با AI", lambda: ai.ai_seo(True), True),
+        "ai_judge_est": ("برآورد هزینهٔ ارزیابی لینک‌ها", lambda: ai.ai_judge(False), False),
+        "ai_judge": ("ارزیابی لینک‌ها با AI", lambda: ai.ai_judge(True), True),
         "newterms": ("ساخت دسته/برچسب جدید", lambda: site.run_newterms(True), True),
     }
 
@@ -131,7 +136,7 @@ def home(output=""):
     body = ("<h1>زعفران ایجنت</h1><p class='muted'>این پنل فقط روی همین کامپیوتر باز است. هر تغییر روی سایت قبلش پیش‌نمایش دارد و تیک تأیید می‌خواهد.</p>"
             "<div class='box'><b>۱) به‌روزرسانی داده‌ها (فقط خواندن):</b><br>"
             + run_btn("check", "بررسی اتصال", "alt") + run_btn("sync", "همگام‌سازی سایت") + run_btn("export", "خروجی مقاله‌ها")
-            + run_btn("audit", "گزارش سئو") + run_btn("style", "بستهٔ لحن", "alt") + run_btn("diagnose", "عیب‌یابی", "alt") + "</div>"
+            + run_btn("audit", "گزارش سئو") + run_btn("style", "بستهٔ لحن", "alt") + run_btn("diagnose", "عیب‌یابی", "alt") + run_btn("ai_test", "تست اتصال AI", "alt") + "</div>"
             "<div class='box'><b>۲) اصلاح مقاله‌های موجود:</b> صفحه‌های «لینک‌دهی داخلی» و «کلمه کلیدی و متا» را باز کنید.</div>"
             "<div class='box'><b>۳) محصول و مقالهٔ جدید:</b> صفحهٔ «محصول و مقاله جدید».</div>"
             "<div class='box'><b>ساخت دستهٔ جدید:</b> فایل knowledge\\new_terms.yaml را پر کنید و "
@@ -142,6 +147,10 @@ def home(output=""):
 def latest_links():
     fs = sorted(pr.PROP.glob("links_2*.csv"))
     return fs[-1] if fs else None
+
+
+def ai_td(r):
+    return f"<td>{E(str(r['ai_score']))}★</td>" if r.get("ai_score") not in (None, "") else ("<td></td>" if "ai_score" in r else "")
 
 
 def links_state(f, rows):
@@ -156,7 +165,9 @@ def links_state(f, rows):
 
 def links_page(output=""):
     f = latest_links()
-    body = "<h1>لینک‌دهی داخلی</h1>" + form("/run", '<input type="hidden" name="action" value="linkplan">' + btn("x", "ساخت پیشنهاد جدید", "alt"))
+    body = ("<h1>لینک‌دهی داخلی</h1>" + form("/run", '<input type="hidden" name="action" value="linkplan">' + btn("x", "ساخت پیشنهاد جدید", "alt"))
+            + form("/run", '<input type="hidden" name="action" value="ai_judge_est">' + btn("x", "برآورد هزینهٔ ارزیابی AI", "alt"))
+            + form("/run", '<input type="hidden" name="action" value="ai_judge">' + confirm_box() + btn("x", "ارزیابی لینک‌ها با AI")))
     if not f:
         return page("لینک‌دهی", body + "<p>هنوز پیشنهادی نیست. اول «خروجی مقاله‌ها» را در صفحهٔ خانه اجرا کنید، بعد پیشنهاد بسازید.</p>" + out_box(output))
     try:
@@ -169,11 +180,11 @@ def links_page(output=""):
         sent = E(r.get("sentence", "")).replace(E(r.get("anchor", "")), f"<mark>{E(r.get('anchor', ''))}</mark>", 1)
         trs.append(f'<tr><td><input type="checkbox" name="ok" value="{i}" {"checked" if str(i) in ok else ""}></td>'
                    f'<td>{link(r["source_url"], r["source_title"])}{edit_link(r["source_url"], r.get("source_id", ""))}</td>'
-                   f'<td>{sent}</td><td>{link(r["target_url"], r["target_title"])}</td><td>{E(r.get("score", ""))}</td></tr>')
+                   f'<td>{sent}</td><td>{link(r["target_url"], r["target_title"])}</td><td>{E(r.get("score", ""))}</td>{ai_td(r)}</tr>')
     inner = (f'<input type="hidden" name="file" value="{E(f.name)}">'
              f"<p class='muted'>{E(f.name)} - {len(rows)} پیشنهاد. روی عنوان‌ها بزنید تا مقاله در تب جدید باز شود. فقط لینک‌های طبیعی و مرتبط را تیک بزنید.</p>"
              "<table><tr><th>تأیید</th><th>مقالهٔ مبدأ (لینک در آن گذاشته می‌شود)</th><th>جمله (عبارت لینک‌شونده زرد است)</th>"
-             "<th>مقالهٔ مقصد</th><th>امتیاز</th></tr>" + "".join(trs) + "</table>"
+             "<th>مقالهٔ مقصد</th><th>امتیاز</th>" + ("<th>AI</th>" if rows and "ai_score" in rows[0] else "") + "</tr>" + "".join(trs) + "</table>"
              + btn("save", "ذخیرهٔ تیک‌ها", "alt") + btn("preview", "پیش‌نمایش اعمال")
              + "<hr>" + confirm_box() + btn("apply", "اعمال لینک‌های تیک‌خورده", "warn"))
     return page("لینک‌دهی", body + form("/links", inner) + out_box(output))
@@ -181,7 +192,9 @@ def links_page(output=""):
 
 def seo_page(output=""):
     body = ("<h1>کلمه کلیدی، عنوان سئو و متا</h1>"
-            + form("/seo", btn("todo", "۱) ساخت فهرست مقاله‌های ضعیف و پرامپت", "alt")))
+            + form("/seo", btn("todo", "۱) ساخت فهرست مقاله‌های ضعیف و پرامپت", "alt"))
+            + form("/run", '<input type="hidden" name="action" value="ai_seo_est">' + btn("x", "برآورد هزینهٔ پر کردن با AI", "alt"))
+            + form("/run", '<input type="hidden" name="action" value="ai_seo">' + confirm_box() + btn("x", "پر کردن خودکار با AI (به‌جای کپی/پیست)")))
     groups = sorted(pr.PROP.glob("seo_prompt_*.md"))
     if groups:
         key = groups[-1].name.rsplit("_", 1)[0]
@@ -299,12 +312,13 @@ class Handler(BaseHTTPRequestHandler):
             if needs and not sure:
                 return self._send(200, home(f"«{label}» اجرا نشد: تیک تأیید را بزنید."))
             txt = f"== {label} ==\n" + run(fn, yes=needs)
-            back = {"linkplan": links_page, "seotodo": seo_page, "inbox_dry": inbox_page, "inbox_send": inbox_page,
+            back = {"linkplan": links_page, "seotodo": seo_page, "ai_judge": links_page, "ai_judge_est": links_page,
+                    "ai_seo": seo_page, "ai_seo_est": seo_page, "inbox_dry": inbox_page, "inbox_send": inbox_page,
                     "audit": reports_page}.get(one("action"), home)
             return self._send(200, back(txt))
         if path == "/links":
             name = one("file")
-            if not re.fullmatch(r"links_\d{8}_\d{4}\.csv", name) or not (pr.PROP / name).exists():
+            if not re.fullmatch(r"links_\d{8}_\d{4}(_ai)?\.csv", name) or not (pr.PROP / name).exists():
                 return self._send(400, "bad file")
             fp = pr.PROP / name
             rows = pr.read_csv(fp)

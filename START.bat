@@ -41,6 +41,12 @@ echo  15  Run the read-only routine now (check, sync, export, audit, report)
 echo  16  Install weekly schedule on this PC (edit day/time in schedule_install.ps1)
 echo  17  Remove the schedule
 echo.
+echo  --- F. AI (needs LLM_* settings in .env) ---
+echo  18  Test the AI connection (a few tokens)
+echo  19  AI: TRIAL - SEO for only 3 articles (cheapest way to check quality)
+echo  20  AI: fill SEO keyword/title/meta for ALL weak articles
+echo  21  AI: judge link proposals (scores 1-5)
+echo.
 echo   0  Exit
 echo.
 set "c="
@@ -62,6 +68,10 @@ if "%c%"=="14" python -m agent.cli panel
 if "%c%"=="15" python -m agent.cli routine
 if "%c%"=="16" powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0schedule_install.ps1"
 if "%c%"=="17" powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0schedule_remove.ps1"
+if "%c%"=="18" python -m agent.cli aitest
+if "%c%"=="19" python -m agent.cli aiseo --go --limit 3
+if "%c%"=="20" python -m agent.cli aiseo --go
+if "%c%"=="21" python -m agent.cli aijudge --go
 if "%c%"=="0" exit /b 0
 echo.
 pause
