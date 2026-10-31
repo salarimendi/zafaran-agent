@@ -71,7 +71,7 @@ def ai_seo(go, limit=None):
     if not go:
         print("Estimate only (nothing sent). Use the menu/panel button to run.")
         return
-    if not confirm(len(batches), "AI call(s) (cached answers cost nothing)"):
+    if not confirm(len(batches), "AI call(s)", to="to the AI provider (spends credit; cached ones are free; NOTHING is sent to your website)"):
         print("Cancelled.")
         return
     existing = {norm(a["focus_keyword"]): a["id"] for a in arts if a.get("focus_keyword")}
@@ -147,7 +147,7 @@ def ai_judge(go, path=None, limit=None):
     if not go:
         print("Estimate only (nothing sent).")
         return
-    if not confirm(len(batches), "AI call(s)"):
+    if not confirm(len(batches), "AI call(s)", to="to the AI provider (spends credit; NOTHING is sent to your website)"):
         print("Cancelled.")
         return
     spent = 0.0
@@ -176,3 +176,32 @@ def ai_judge(go, path=None, limit=None):
     scored = [int(r["ai_score"]) for r in rows if r["ai_score"] != ""]
     print(f"\nScored {len(scored)} of {len(rows)}: " + ", ".join(f"{s}★={scored.count(s)}" for s in (5, 4, 3, 2, 1)) + f". Cost: ${spent:.4f}")
     print(f"Saved {out.name}: score>=4 are pre-ticked. Open the links page and review before applying.")
+
+
+def ai_style(go):
+    """One cheap call: turn knowledge/style/style_pack.md into a short knowledge/style/style_guide.md."""
+    from . import style
+    c = llm.cfg()
+    f = style.OUT / "style_pack.md"
+    if not f.exists():
+        style.build()
+    if not f.exists():
+        return
+    head, _, rest = f.read_text(encoding="utf-8").partition("\n---\n")
+    msgs = [{"role": "system", "content": head.strip()}, {"role": "user", "content": rest.strip()[:9000]}]
+    est_in = llm.est_tokens(sum(len(m["content"]) for m in msgs))
+    print("Style pack -> style guide (1 call, input trimmed to 9000 characters).")
+    _brief(c, 1, est_in, min(c["max_out"], 1300))
+    if not go:
+        print("Estimate only.")
+        return
+    if not confirm(1, "AI call", to="to the AI provider (spends credit; NOTHING is sent to your website)"):
+        print("Cancelled.")
+        return
+    text, info = llm.chat(msgs, max_out=min(c["max_out"], 1300), task="style")
+    out = style.OUT / "style_guide_ai.md"
+    if out.exists():
+        out.rename(style.OUT / f"style_guide_ai_prev_{datetime.now():%Y%m%d_%H%M%S}.md")
+    out.write_text(text.strip() + "\n", encoding="utf-8")
+    print(f"Saved {out} ({len(text)} chars). Cost: ${info['cost']:.4f}.")
+    print("This is only a DRAFT: it does NOT replace your main guide (style_guide.md). In the panel (Tone page) you can compare and choose.")

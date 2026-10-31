@@ -46,6 +46,8 @@ echo  18  Test the AI connection (a few tokens)
 echo  19  AI: TRIAL - SEO for only 3 articles (cheapest way to check quality)
 echo  20  AI: fill SEO keyword/title/meta for ALL weak articles
 echo  21  AI: judge link proposals (scores 1-5)
+echo  22  AI: build the tone/style guide from the style pack (run 8 first)
+echo  23  AI: suggest Latin slugs for Persian addresses (review/apply in the panel)
 echo.
 echo   0  Exit
 echo.
@@ -72,6 +74,8 @@ if "%c%"=="18" python -m agent.cli aitest
 if "%c%"=="19" python -m agent.cli aiseo --go --limit 3
 if "%c%"=="20" python -m agent.cli aiseo --go
 if "%c%"=="21" python -m agent.cli aijudge --go
+if "%c%"=="22" python -m agent.cli aistyle --go
+if "%c%"=="23" python -m agent.cli aislugs --go
 if "%c%"=="0" exit /b 0
 echo.
 pause

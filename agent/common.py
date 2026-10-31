@@ -67,5 +67,5 @@ def slug_error(slug):
     return None
 
 
-def confirm(n, what="item(s)"):
-    return input(f"\nSend {n} {what} to the site? Type y to continue: ").strip().lower() == "y"
+def confirm(n, what="item(s)", to="to the site"):
+    return input(f"\nSend {n} {what} {to}? Type y to continue: ").strip().lower() == "y"

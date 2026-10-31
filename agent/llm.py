@@ -28,11 +28,16 @@ def cfg():
     c = {"base": g("LLM_BASE_URL", "").strip().rstrip("/"), "key": g("LLM_API_KEY", "").strip(), "model": g("LLM_MODEL", "").strip(),
          "pin": float(g("LLM_PRICE_IN_PER_M", "0") or 0), "pout": float(g("LLM_PRICE_OUT_PER_M", "0") or 0),
          "budget": float(g("LLM_BUDGET_USD", "0") or 0), "max_out": int(g("LLM_MAX_OUTPUT_TOKENS", "1500")),
-         "run_cap": int(g("LLM_MAX_TOKENS_PER_RUN", "60000")), "timeout": int(g("REQUEST_TIMEOUT", "60"))}
+         "run_cap": int(g("LLM_MAX_TOKENS_PER_RUN", "60000")), "timeout": int(g("LLM_TIMEOUT", "150"))}
     if not (c["base"] and c["key"] and c["model"]) or "xxxx" in c["key"]:
         raise LLMError("Fill LLM_BASE_URL, LLM_API_KEY and LLM_MODEL in .env (see .env.example).")
     c["base"] = re.sub(r"/chat/completions$", "", c["base"])
     return c
+
+
+def reset_run():
+    global _run_tokens
+    _run_tokens = 0
 
 
 def ratio():
@@ -88,6 +93,9 @@ def chat(messages, max_out=None, task="x", use_cache=True):
         try:
             r = requests.post(c["base"] + "/chat/completions", json=body, timeout=c["timeout"],
                               headers={"Authorization": f"Bearer {c['key']}", "Content-Type": "application/json"})
+        except requests.Timeout:
+            raise LLMError(f"The AI provider did not answer within {c['timeout']}s (LLM_TIMEOUT). The call may still have been billed - "
+                           "check your balance. Raise LLM_TIMEOUT in .env or try a smaller/faster model.")
         except requests.RequestException as e:
             raise LLMError(f"Network error: {type(e).__name__}: {e}")
         if r.status_code == 400 and "max_tokens" in r.text and "max_completion_tokens" in r.text and attempt == 0:

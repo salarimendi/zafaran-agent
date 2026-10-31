@@ -11,7 +11,25 @@ WORDS = ["شما", "ما", "می‌توانید", "توصیه", "حتماً", "�
 PROMPT = """تو سردبیر محتوای «زعفران مارکت» هستی. بر اساس آمار و نمونه‌های زیر، یک «راهنمای لحن و سبک نگارش» بنویس (حداکثر ۷۰۰ کلمه) شامل:
 ۱) لحن و نحوهٔ خطاب به مخاطب  ۲) ساختار معمول مقاله (مقدمه، تیترهای H2، جمع‌بندی)  ۳) طول جمله و پاراگراف
 ۴) عبارت‌ها و کلمات امضای برند  ۵) چیزهایی که نباید نوشت  ۶) الگوی پیشنهادی مقدمه و جمع‌بندی  ۷) قواعد سئویی که در مقاله‌ها رعایت شده.
-فقط خود راهنما را بنویس. بعد آن را در knowledge\\style\\style_guide.md ذخیره کنید."""
+فقط خود راهنما را بنویس و هیچ لینک یا آدرس اینترنتی در آن نیاور. بعد آن را در knowledge\\style\\style_guide.md ذخیره کنید."""
+
+
+def _clean(text):
+    """Plain text only: no links, images, URLs or leftover brackets."""
+    t = strip_md(text)
+    t = re.sub(r"https?://\S+", "", t)
+    return " ".join(t.replace("[", " ").replace("]", " ").split())
+
+
+def _excerpt(body, limit=1500):
+    out, n = [], 0
+    for p in paragraphs(body):
+        c = _clean(p)
+        if n + len(c) > limit and out:
+            break
+        out.append(c)
+        n += len(c)
+    return "\n\n".join(out)
 
 
 def _sentences(text):
@@ -40,7 +58,7 @@ def build():
     h2s = [h for a in arts for h in h2_list(a["body"])]
     step = max(len(h2s) // 25, 1)
     intros = sorted((paragraphs(a["body"])[0] for a in arts if paragraphs(a["body"])), key=len)
-    pick = intros[:: max(len(intros) // 6, 1)][:6]
+    pick = [_clean(p)[:400].rsplit(" ", 1)[0] for p in intros[:: max(len(intros) // 6, 1)][:6]]
     good = sorted([a for a in arts if a.get("focus_keyword") and a.get("meta_description")],
                   key=lambda a: abs(a.get("words", 0) - med))[:3]
     L = [PROMPT, "", "---", "", f"# آمار ({len(arts)} مقاله، حدود {sum(words)} کلمه)", "",
@@ -56,7 +74,7 @@ def build():
     L += ["", "## نمونه مقاله‌های کامل‌تر (ابتدای متن)"]
     for a in good:
         L += ["", f"### {a.get('title')} ({a.get('words')} کلمه) - کلمه کلیدی: {a.get('focus_keyword')}",
-              "تیترها: " + " / ".join(h2_list(a["body"])[:8]), "", a["body"][:1500]]
-    (OUT / "style_pack.md").write_text("\n".join(L), encoding="utf-8")
+              "تیترها: " + " / ".join(_clean(h) for h in h2_list(a["body"])[:8]), "", _excerpt(a["body"])]
+    (OUT / "style_pack.md").write_text(re.sub(r"https?://\S+", "", "\n".join(L)), encoding="utf-8")
     kb = (OUT / "style_pack.md").stat().st_size // 1024
     print(f"Wrote {OUT}\\style_pack.md ({kb} KB). Paste its whole content into a chat model; save the answer as style_guide.md.")
