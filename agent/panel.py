@@ -8,6 +8,7 @@ import io
 import json
 import re
 import secrets
+import threading
 import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, quote, unquote, urlparse
@@ -70,7 +71,29 @@ def edit_link(url, pid):
     return ""
 
 
-NAV = [("/", "خانه"), ("/style", "لحن نوشتار"), ("/seo", "کلمه کلیدی و متا"), ("/links", "لینک‌دهی داخلی"), ("/slugs", "آدرس‌ها (slug)"), ("/inbox", "محصول و مقاله جدید"), ("/reports", "گزارش سئو")]
+VERSION = "12"
+NAV = [("/", "خانه"), ("/health", "سلامت سایت"), ("/gsc", "Search Console"), ("/style", "لحن نوشتار"), ("/seo", "کلمه کلیدی و متا"), ("/links", "لینک‌دهی داخلی"), ("/slugs", "آدرس‌ها (slug)"), ("/inbox", "محصول و مقاله جدید"), ("/reports", "گزارش سئو"), ("/roadmap", "نقشهٔ راه")]
+
+
+JOBS = {}
+
+
+def start_job(name, fn):
+    """Long read-only work (site crawl) runs in a background thread; the page auto-refreshes."""
+    j = JOBS.get(name)
+    if j and j["running"]:
+        return False
+    j = JOBS[name] = {"running": True, "log": [], "error": None}
+
+    def work():
+        try:
+            fn(lambda m: j["log"].append(m))
+        except (Exception, SystemExit) as e:
+            j["error"] = f"{type(e).__name__}: {e}"
+        finally:
+            j["running"] = False
+    threading.Thread(target=work, daemon=True).start()
+    return True
 
 
 def run(fn, yes=False):
@@ -112,10 +135,17 @@ def actions():
     }
 
 
-def page(title, body):
+def page(title, body, head=""):
     nav = "".join(f'<a href="{u}">{n}</a>' for u, n in NAV)
-    return (f'<!doctype html><html dir="rtl" lang="fa"><head><meta charset="utf-8"><title>{E(title)}</title>'
-            f"<style>{font_css()}{CSS}</style></head><body><nav>{nav}</nav><main>{body}</main></body></html>")
+    return (f'<!doctype html><html dir="rtl" lang="fa"><head><meta charset="utf-8">{head}<title>{E(title)}</title>'
+            f"<style>{font_css()}{CSS}</style></head><body><nav>{nav}</nav><main>{body}</main>"
+            f"<footer class='muted' style='text-align:center;margin:30px'>نسخهٔ پنل {VERSION}</footer></body></html>")
+
+
+def not_found(path):
+    return page("آدرس پیدا نشد", f"<h1>این آدرس در پنل وجود ندارد</h1><p><code style='direction:ltr;display:inline-block'>{E(path)}</code></p>"
+                f"<p>اگر این پیام را بعد از جایگزین کردن فایل‌های جدید می‌بینید، پنل هنوز با نسخهٔ قدیمی باز است: پنجرهٔ سیاه را ببندید و دوباره "
+                f"START.bat ← ۱۴ را بزنید. نسخهٔ در حال اجرا: <b>{VERSION}</b></p><p><a href='/'>خانه</a> · <a href='/health'>سلامت سایت</a></p>")
 
 
 def form(action, inner):
@@ -143,6 +173,7 @@ def _mt(p):
 
 
 def workflow():
+    from . import health as hl
     from . import slugs as sl
     K, R = ROOT / "knowledge", ROOT / "reports"
     snap, pack, guide = K / "site" / "snapshot.json", K / "style" / "style_pack.md", K / "style" / "style_guide.md"
@@ -150,48 +181,153 @@ def workflow():
     audits = sorted(R.glob("seo_audit_*.csv")) if R.exists() else []
     ans, links = pr.PROP / "seo_answer.csv", sorted(pr.PROP.glob("links_2*.csv"))
     bad = sl.scan() if snap.exists() else None
-    I = lambda p, ok: _mt(p) if ok else "هنوز انجام نشده"
-    # (number, title, done?, info, kind, target, prerequisites)
+    hrep = None
+    if hl.LATEST.exists():
+        try:
+            hrep = json.loads(hl.LATEST.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    from . import gsc as gsc_mod
+    gsc_saved = gsc_mod.saved()
+    I = lambda p: _mt(p) if p.exists() else "هنوز انجام نشده"
+    # key, title, done?, info, kind, target, prerequisites(keys)
     return [
-        (1, "بررسی اتصال به سایت", None, "هر زمان", "run", "check", []),
-        (2, "همگام‌سازی سایت (دسته‌ها، محصولات، فهرست مقاله‌ها)", snap.exists(), I(snap, snap.exists()), "run", "sync", []),
-        (3, "خروجی مقاله‌ها (پایهٔ تحلیل و لینک‌دهی)", bool(arts), f"{len(arts)} مقاله" if arts else "هنوز انجام نشده", "run", "export", [2]),
-        (4, "گزارش سئو", bool(audits), I(audits[-1], True) if audits else "هنوز انجام نشده", "run", "audit", [3]),
-        (5, "بستهٔ لحن (آمار نوشتار شما)", pack.exists(), I(pack, pack.exists()), "run", "style", [3]),
-        (6, "راهنمای لحن (ساخت با AI و ویرایش دستی)", guide.exists(), I(guide, guide.exists()), "page", "/style", [5]),
-        (7, "کلمه کلیدی، عنوان سئو و متا", ans.exists(), I(ans, ans.exists()) + " (آخرین پیشنهاد)" if ans.exists() else "هر زمان", "page", "/seo", [3]),
-        (8, "لینک‌دهی داخلی", bool(links), I(links[-1], True) + " (آخرین پیشنهاد)" if links else "هر زمان", "page", "/links", [3]),
-        (9, "آدرس‌های (slug) فارسی", None if bad is None else not bad,
-         "ابتدا مرحلهٔ ۲" if bad is None else (f"{len(bad)} مورد فارسی مانده" if bad else "همه لاتین ✓"), "page", "/slugs", [2]),
-        (10, "محصول و مقالهٔ جدید", None, "هر زمان", "page", "/inbox", [2]),
+        ("check", "بررسی اتصال به سایت", None, "هر زمان", "run", "check", []),
+        ("sync", "همگام‌سازی سایت (دسته‌ها، محصولات، فهرست مقاله‌ها)", snap.exists(), I(snap), "run", "sync", []),
+        ("export", "خروجی مقاله‌ها (پایهٔ تحلیل و لینک‌دهی)", bool(arts), f"{len(arts)} مقاله" if arts else "هنوز انجام نشده", "run", "export", ["sync"]),
+        ("audit", "گزارش سئوی مقاله‌ها", bool(audits), _mt(audits[-1]) if audits else "هنوز انجام نشده", "run", "audit", ["export"]),
+        ("health", "سلامت فنی سایت و محصولات (خزش فقط‌خواندنی)", bool(hrep),
+         (f"{hrep['time'][:16].replace('T', ' ')} - {hrep['severity'].get('H', 0)} مورد جدی" if hrep else "هنوز انجام نشده"), "page", "/health", ["sync"]),
+        ("gsc", "Search Console (خروجی Performance، بدون حساب سرویس)", bool(gsc_saved), (_mt(gsc_saved[-1]) if gsc_saved else "هنوز انجام نشده"), "page", "/gsc", []),
+        ("pack", "بستهٔ لحن (آمار نوشتار شما)", pack.exists(), I(pack), "run", "style", ["export"]),
+        ("guide", "راهنمای لحن (ویرایش دستی / پیش‌نویس AI)", guide.exists(), I(guide), "page", "/style", ["pack"]),
+        ("seo", "کلمه کلیدی، عنوان سئو و متا", ans.exists(), _mt(ans) + " (آخرین پیشنهاد)" if ans.exists() else "هر زمان", "page", "/seo", ["export"]),
+        ("links", "لینک‌دهی داخلی", bool(links), _mt(links[-1]) + " (آخرین پیشنهاد)" if links else "هر زمان", "page", "/links", ["export"]),
+        ("slugs", "آدرس‌های (slug) فارسی", None if bad is None else not bad,
+         "ابتدا همگام‌سازی" if bad is None else (f"{len(bad)} مورد فارسی مانده" if bad else "همه لاتین ✓"), "page", "/slugs", ["sync"]),
+        ("inbox", "محصول و مقالهٔ جدید", None, "هر زمان", "page", "/inbox", ["sync"]),
     ]
 
 
 def home(output=""):
     wf = workflow()
-    done = {n: d for n, _, d, *_ in wf}
-    nxt = next((n for n in (2, 3, 4, 5, 6) if not done[n]), None)
+    done = {k: d for k, _, d, *_ in wf}
+    num = {k: i for i, (k, *_r) in enumerate(wf, 1)}
+    nxt = next((k for k in ("sync", "export", "audit", "health", "pack", "guide") if not done[k]), None)
     rows = []
-    for n, title, d, info, kind, target, need in wf:
-        miss = [x for x in need if not done[x]]
+    for i, (k, title, d, info, kind, target, need) in enumerate(wf, 1):
+        miss = [num[x] for x in need if not done[x]]
         mark = "✓" if d else ("○" if d is False else "·")
         if miss:
-            act = f"<span class='muted'>اول مرحلهٔ {'، '.join(map(str, miss))}</span>"
+            act = f"<span class='muted'>اول گام {'، '.join(map(str, miss))}</span>"
         elif kind == "run":
             act = form("/run", f'<input type="hidden" name="action" value="{target}">' + btn("x", "اجرا", "alt")).replace("<form", '<form style="display:inline"')
         else:
             act = f'<a href="{target}"><button type="button">باز کردن</button></a>'
-        bg = ' style="background:#fff3cd"' if n == nxt else ""
-        rows.append(f"<tr{bg}><td><b>{n}</b></td><td>{mark}</td><td>{E(title)}" + (" <b>← مرحلهٔ بعدی پیشنهادی</b>" if n == nxt else "")
+        bg = ' style="background:#fff3cd"' if k == nxt else ""
+        rows.append(f"<tr{bg}><td><b>{i}</b></td><td>{mark}</td><td>{E(title)}" + (" <b>← گام بعدیِ پیشنهادی</b>" if k == nxt else "")
                     + f"</td><td class='muted'>{E(str(info))}</td><td>{act}</td></tr>")
-    body = ("<h1>زعفران ایجنت</h1><p class='muted'>این پنل فقط روی همین کامپیوتر باز است. هر تغییر روی سایت قبلش پیش‌نمایش دارد و تیک تأیید می‌خواهد. "
-            "مسیر کار: مراحل ۲ تا ۶ را به ترتیب انجام دهید (یک بار و بعد هر چند هفته)؛ مراحل ۷ تا ۱۰ را هر وقت لازم بود.</p>"
-            "<table><tr><th>#</th><th></th><th>مرحله</th><th>وضعیت</th><th>اقدام</th></tr>" + "".join(rows) + "</table>"
+    body = ("<h1>زعفران ایجنت</h1><p class='muted'>این پنل فقط روی همین کامپیوتر باز است. فقط کارهایی که مستقیم روی «سایت» اثر می‌گذارند (ویرایش یا ثبت محتوا، سئو، slug، دسته) پیش‌نمایش و تیک تأیید دارند؛ "
+            "بررسی‌ها و گزارش‌ها فقط می‌خوانند. پیشرفت کلی پروژه: <a href='/roadmap'>نقشهٔ راه</a>.</p>"
+            "<p>مسیر کار: گام‌های اول تا ششم را یک بار (و بعد هر چند هفته) انجام دهید؛ بقیه را هر وقت لازم بود.</p>"
+            "<table><tr><th>گام</th><th></th><th>کار</th><th>وضعیت</th><th>اقدام</th></tr>" + "".join(rows) + "</table>"
             "<div class='box'><b>ابزارهای دیگر:</b> "
             + form("/run", '<input type="hidden" name="action" value="diagnose">' + btn("x", "عیب‌یابی اتصال", "alt")).replace("<form", '<form style="display:inline"')
             + form("/run", '<input type="hidden" name="action" value="ai_test">' + btn("x", "تست اتصال AI", "alt")).replace("<form", '<form style="display:inline"')
             + ' &nbsp; <a href="/terms">دستهٔ یا برچسب جدید بسازم ←</a></div>')
     return page("خانه", body + out_box(output))
+
+
+HSEV = {"H": ("جدی", "#b3261e"), "M": ("متوسط", "#a65f00"), "L": ("کم", "#6b5b4b")}
+
+
+def health_page(output=""):
+    from . import health as hl
+    job = JOBS.get("health")
+    running = bool(job and job["running"])
+    head = '<meta http-equiv="refresh" content="3">' if running else ""
+    body = ("<h1>سلامت سایت</h1><p class='muted'>خزش فقط‌خواندنی: صفحه‌های منتشرشده را مثل یک بازدیدکننده باز می‌کند و وضعیت، ریدایرکت، noindex، canonical، عنوان/متا/H1، Alt تصویر، Schema، robots/Sitemap و لینک‌های داخلی را می‌سنجد؛ محصولات ووکامرس را هم ممیزی می‌کند. "
+            "چیزی را تغییر نمی‌دهد و هوش مصنوعی مصرف نمی‌کند. بررسی کامل چند دقیقه طول می‌کشد؛ می‌توانید صفحه را باز بگذارید یا بعداً برگردید.</p>")
+    if running:
+        body += "<div class='box'>⏳ در حال اجرا...</div>"
+    else:
+        body += ("<div class='box'>" + form("/healthrun", btn("full", "بررسی کامل (صفحه‌ها + لینک‌ها + محصولات)")).replace("<form", '<form style="display:inline"')
+                 + form("/healthrun", btn("products", "فقط محصولات (سریع)", "alt")).replace("<form", '<form style="display:inline"')
+                 + form("/healthrun", btn("quick", "آزمایش سریع (۴۰ صفحه)", "alt")).replace("<form", '<form style="display:inline"') + "</div>")
+    if job:
+        if job["error"]:
+            body += f"<div class='box' style='color:#b3261e'>خطا: {E(job['error'])}</div>"
+        body += f"<details {'open' if running else ''}><summary>گزارش پیشرفت</summary><pre>{E(chr(10).join(job['log'][-15:]))}</pre></details>"
+    rep = None
+    if hl.LATEST.exists():
+        try:
+            rep = json.loads(hl.LATEST.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    if rep:
+        from . import healthfix as hf
+        sv = rep["severity"]
+        emap = hf.entity_map()
+        body += (f"<h2>آخرین نتیجه ({E(rep['time'][:16].replace('T', ' '))}، {E({'full': 'بررسی کامل', 'pages': 'صفحه‌ها', 'products': 'محصولات'}.get(rep.get('scope'), ''))})</h2>"
+                 "<div class='box'>" + " &nbsp; ".join(f"<b style='color:{HSEV[k][1]}'>{HSEV[k][0]}: {sv.get(k, 0)}</b>" for k in "HML")
+                 + f" &nbsp; <span class='muted'>فایل کامل: reports\\{E(rep['csv'])}</span></div>")
+        if hf.sitewide_noindex(rep):
+            body += ("<div class='box' style='border-color:#b3261e;background:#fdecea'><b>⚠ تقریباً همهٔ صفحه‌ها noindex هستند.</b> این معمولاً یک علت دارد: "
+                     "وردپرس ← تنظیمات ← خواندن ← تیک «Discourage search engines from indexing this site» روشن است (یا افزونهٔ حالت نگهداری/سئو آن را گذاشته). "
+                     "اول همین را خاموش کنید و دوباره «آزمایش سریع» بزنید؛ بقیهٔ فهرست بعد از آن معنی پیدا می‌کند.</div>")
+        ov = hf.overview(rep)
+        if ov:
+            rows = "".join(
+                f"<tr><td><b style='color:{HSEV[o['sev']][1]}'>{HSEV[o['sev']][0]}</b></td><td>{E(o['title'])}</td><td><b>{o['n']}</b></td>"
+                f"<td style='color:{hf.MODE_LABEL['ai' if o['ai'] else 'auto'][1]}'>{'با AI (با تأیید شما)' if o['ai'] else 'خودکار با کد'}</td>"
+                f"<td><a href='/healthfix?g={o['group']}'><button type='button'>مرور و اصلاح ←</button></a></td></tr>" for o in ov)
+            body += ("<h2>از کجا شروع کنم؟</h2><div class='box'>مورد‌هایی که همین‌جا اصلاح می‌شوند، به ترتیب اهمیت. در هر صفحه فهرست را می‌بینید، تیک می‌زنید، "
+                     "پیش‌نمایش می‌گیرید و بعد اعمال می‌کنید. بقیهٔ مشکل‌ها (پایین‌تر) راهنمای «چه کنم» دارند.<table><tr><th>شدت</th><th>گروه</th><th>تعداد</th><th>روش</th><th></th></tr>" + rows + "</table></div>")
+        by = {}
+        for r in rep["rows"]:
+            by.setdefault(r[2], []).append(r)
+        order = sorted(by, key=lambda c: (-max(hl.SEV[r[0]] for r in by[c]), -len(by[c])))
+        if not order:
+            body += "<p>✓ هیچ مشکلی پیدا نشد.</p>"
+        if order:
+            body += "<h2>همهٔ مشکل‌ها، با توضیح</h2>"
+        for c in order:
+            rs = by[c]
+            top = max(rs, key=lambda r: hl.SEV[r[0]])[0]
+            mode, why, how = hf.GUIDE.get(c, ("manual", "", ""))
+            lab, col = hf.MODE_LABEL[mode]
+            g = hf.GROUP_OF.get(c)
+
+            def one_row(r):
+                e = emap.get(hl.nurl(r[3]))
+                ed = edit_link(r[3], e["id"]) if e else ""
+                extra = ""
+                if c == "noindex":
+                    v, w = hf.noindex_verdict(e["kind"] if e else ("home" if r[1] == "home" else r[1]), r[3], r[4])
+                    cl, tx = {"ok": ("#1b6e3c", "✓ درست"), "problem": ("#b3261e", "⚠ باید index شود"), "check": ("#a65f00", "؟ بررسی کنید")}[v]
+                    extra = f"<b style='color:{cl}'>{tx}</b> <span class='muted'>{E(w)}</span><br>"
+                return f"<tr><td>{link(r[3], r[4] or r[3])}{ed}</td><td class='muted'>{extra}{E(r[5])}</td></tr>"
+            lis = "".join(one_row(r) for r in rs[:80])
+            more = f"<tr><td colspan=2 class='muted'>... و {len(rs) - 80} مورد دیگر در فایل CSV</td></tr>" if len(rs) > 80 else ""
+            fixbtn = f"<p><a href='/healthfix?g={g}'><button type='button'>اصلاح همین‌جا ←</button></a></p>" if g else ""
+            body += (f"<details class='box'><summary><b style='color:{HSEV[top][1]}'>[{HSEV[top][0]}]</b> {E(hl.HELP.get(c, c))} "
+                     f"<b>({sv_count(rep, c)})</b> <span style='color:{col};font-size:12px'>[{lab}]</span></summary>"
+                     f"<p><span class='muted'>چرا مهم است:</span> {E(why)}<br><span class='muted'>چه کنم:</span> {E(how)}</p>{fixbtn}"
+                     f"<table>{lis}{more}</table></details>")
+    elif not job:
+        body += "<p class='muted'>هنوز بررسی انجام نشده است. اگر فهرست صفحه‌ها خالی بود، اول در صفحهٔ خانه «همگام‌سازی سایت» را بزنید.</p>"
+    return page("سلامت سایت", body + out_box(output), head)
+
+
+def sv_count(rep, c):
+    return rep["codes"].get(c, 0)
+
+
+def roadmap_page(output=""):
+    import markdown
+    f = ROOT / "ROADMAP.md"
+    txt = f.read_text(encoding="utf-8") if f.exists() else "ROADMAP.md پیدا نشد."
+    return page("نقشهٔ راه", "<div class='box' style='line-height:2'>" + markdown.markdown(txt, extensions=["extra", "sane_lists"]) + "</div>")
 
 
 def style_page(output=""):
@@ -406,7 +542,7 @@ def seo_review():
              "<table><tr><th>تأیید</th><th>مقاله و مقدار فعلی</th><th>پیشنهاد (قابل ویرایش)</th></tr>" + "".join(trs) + "</table>"
              + btn("save", "ذخیرهٔ ویرایش‌ها", "alt") + btn("preview", "پیش‌نمایش اعمال")
              + "<hr>" + confirm_box() + btn("apply", "اعمال تیک‌خورده‌ها در Yoast", "warn")) + SEO_JS
-    return "<h2>مرحلهٔ ۲ - بازبینی، ویرایش و اعمال در سایت</h2>" + form("/seoreview", inner)
+    return "<h2>ب - بازبینی، ویرایش و اعمال در سایت</h2>" + form("/seoreview", inner)
 
 
 def norm_(s):
@@ -420,7 +556,7 @@ def ai_problems(r, others):
 
 
 def seo_page(output=""):
-    body = ("<h1>کلمه کلیدی، عنوان سئو و متا</h1><div class='box'><b>مرحلهٔ ۱ - پیشنهاد هوش مصنوعی</b> (فقط پیشنهاد می‌سازد و اعتبار AI مصرف می‌کند؛ در سایت هیچ تغییری نمی‌دهد)<br>"
+    body = ("<h1>کلمه کلیدی، عنوان سئو و متا</h1><div class='box'><b>الف - پیشنهاد هوش مصنوعی</b> (فقط پیشنهاد می‌سازد و اعتبار AI مصرف می‌کند؛ در سایت هیچ تغییری نمی‌دهد)<br>"
             + form("/run", '<input type="hidden" name="action" value="ai_seo_est">' + btn("x", "برآورد هزینه", "alt")).replace("<form", '<form style="display:inline"')
             + form("/run", '<input type="hidden" name="action" value="ai_seo3">' + confirm_box("ai") + btn("x", "آزمایش روی ۳ مقاله")).replace("<form", '<form style="display:inline"')
             + form("/run", '<input type="hidden" name="action" value="ai_seo">' + confirm_box("ai") + btn("x", "همهٔ مقاله‌های ضعیف")).replace("<form", '<form style="display:inline"')
@@ -494,6 +630,12 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b)
 
+    def _redirect(self, where):
+        self.send_response(303)
+        self.send_header("Location", where)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def _host_ok(self):
         port = self.server.server_address[1]
         return self.headers.get("Host", "") in (f"127.0.0.1:{port}", f"localhost:{port}")
@@ -520,9 +662,23 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(b)))
             self.end_headers()
             return self.wfile.write(b)
-        pages = {"/": home, "/style": style_page, "/slugs": slugs_page, "/terms": terms_page, "/links": links_page, "/seo": seo_page, "/inbox": inbox_page, "/reports": reports_page}
+        if path == "/ping":
+            return self._send(200, f"zafaran-panel {VERSION}")
+        if path == "/healthrun":
+            return self._redirect("/health")
+        if path in ("/healthfix", "/gsc"):
+            from . import panel_extra as px
+            q = parse_qs(urlparse(self.path).query)
+            if path == "/healthfix":
+                return self._send(200, px.fix_page(q.get("g", [""])[0]))
+            try:
+                mi = max(1, int(q.get("min", ["10"])[0]))
+            except ValueError:
+                mi = 10
+            return self._send(200, px.gsc_page(min_impr=mi))
+        pages = {"/": home, "/health": health_page, "/roadmap": roadmap_page, "/style": style_page, "/slugs": slugs_page, "/terms": terms_page, "/links": links_page, "/seo": seo_page, "/inbox": inbox_page, "/reports": reports_page}
         fn = pages.get(urlparse(self.path).path)
-        self._send(200, fn()) if fn else self._send(404, "not found")
+        self._send(200, fn()) if fn else self._send(404, not_found(path))
 
     def do_POST(self):
         try:
@@ -534,7 +690,14 @@ class Handler(BaseHTTPRequestHandler):
         if not self._host_ok():
             return self._send(403, "forbidden")
         n = int(self.headers.get("Content-Length", 0))
-        f = parse_qs(self.rfile.read(n).decode("utf-8"), keep_blank_values=True)
+        ctype, files = self.headers.get("Content-Type", ""), []
+        if ctype.startswith("multipart/form-data"):
+            if n > 80 * 1024 * 1024:
+                return self._send(413, page("فایل بزرگ است", "<h1>فایل بیش از ۸۰ مگابایت است</h1>"))
+            from . import panel_extra as px
+            f, files = px.parse_multipart(ctype, self.rfile.read(n))
+        else:
+            f = parse_qs(self.rfile.read(n).decode("utf-8"), keep_blank_values=True)
         if f.get("t", [""])[0] != TOKEN:
             return self._send(403, "bad token - reload the page")
         one = lambda k: f.get(k, [""])[0]
@@ -577,6 +740,51 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 txt = "اعمال نشد: تیک تأیید را بزنید."
             return self._send(200, links_page(txt))
+        if path == "/healthrun":
+            from . import health as hl
+            do = one("do")
+            kw = {"full": {}, "products": {"products_only": True}, "quick": {"limit": 40, "pages_only": True}}.get(do)
+            if kw is None:
+                return self._send(400, "unknown")
+            start_job("health", lambda log: hl.run(log, **kw))
+            return self._redirect("/health")
+        if path == "/hfbuild":
+            from . import healthfix as hf, panel_extra as px
+            g, do = one("g"), one("do")
+            if g not in hf.GROUPS:
+                return self._send(400, "unknown group")
+            if do == "est":
+                return self._send(200, px.fix_page(g, run(lambda: print(hf.ai_estimate(g)))))
+            if do == "ai":
+                if not sure:
+                    return self._send(200, px.fix_page(g, "ساخته نشد: تیک مصرف اعتبار AI را بزنید."))
+                start_job("hf_" + g, lambda log: hf.build_ai(g, log))
+            else:
+                start_job("hf_" + g, lambda log: hf.build(g, log))
+            return self._redirect("/healthfix?g=" + g)
+        if path == "/hfapply":
+            from . import healthfix as hf, panel_extra as px
+            g, do = one("g"), one("do")
+            if g not in hf.GROUPS:
+                return self._send(400, "unknown group")
+            sel, ed = px.parse_edits(f, 0)
+            if do == "apply" and not sure:
+                return self._send(200, px.fix_page(g, "اعمال نشد: تیک تأیید را بزنید."))
+            go = do == "apply"
+            return self._send(200, px.fix_page(g, run(lambda: hf.apply(g, sel, ed, go), yes=go)))
+        if path == "/gsc":
+            from . import gsc, panel_extra as px
+            try:
+                if one("do") == "inbox":
+                    _, msg = gsc.import_inbox()
+                elif files:
+                    _, msg = gsc.import_files(files)
+                else:
+                    return self._send(200, px.gsc_page("فایلی انتخاب نشده است."))
+            except (ValueError, OSError) as e:
+                return self._send(200, px.gsc_page(f"خطا: {e}"))
+            px.FLASH["gsc"] = msg
+            return self._redirect("/gsc")
         if path == "/terms":
             import hashlib, yaml
             from . import site
@@ -683,27 +891,100 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, seo_page("اعمال نشد: تیک تأیید را بزنید."))
             txt = run(lambda: pr.apply_seo(do == "apply"), yes=True) if do in ("preview", "apply") else ""
             return self._send(200, seo_page(txt))
-        self._send(404, "not found")
+        self._send(404, not_found(path))
 
 
 def make_server(port=0):
     return HTTPServer(("127.0.0.1", port), Handler)
 
 
-def serve():
+LOCK_PORT = 29417                  # odd, unregistered, below the OS "ephemeral" ranges; held by the running copy only
+PANEL_PORTS = range(2000, 2011)   # the panel's address: http://127.0.0.1:2000/ (next free one if 2000 is taken); loopback only
+
+
+def _acquire_lock():
+    import socket
+    sk = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):  # Windows: forbid sharing the port
+        sk.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+    try:
+        sk.bind(("127.0.0.1", LOCK_PORT))
+        sk.listen(1)
+    except OSError:
+        sk.close()
+        return None
+    return sk
+
+
+def _running_panel():
+    """-> (port, version) of an already running panel, or None."""
+    import urllib.request
+    for port in PANEL_PORTS:
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/ping", timeout=1.5) as r:
+                t = r.read().decode("utf-8", "replace").strip()
+            if t.startswith("zafaran-panel"):
+                return port, t.split()[-1]
+        except Exception:
+            continue
+    return None
+
+
+def _old_panels():
+    """Panels from versions before 12 listened on 8765-8775 and know nothing about the lock; a stale tab or window of
+    one of them serves OLD code (this caused confusing 'not found' pages). -> list of ports."""
+    import urllib.request
+    found = []
     for port in range(8765, 8776):
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=0.6) as r:
+                if "زعفران ایجنت" in r.read(4000).decode("utf-8", "replace"):
+                    found.append(port)
+        except Exception:
+            continue
+    return found
+
+
+def serve():
+    old = _old_panels()
+    if old:
+        print("WARNING: an OLD panel is still running on port " + ", ".join(map(str, old)) + ".")
+        print("Close its black window (and its browser tab) so you do not use outdated code.\n")
+    lock = _acquire_lock()
+    if lock is None:
+        other = _running_panel()
+        if other:
+            port, ver = other
+            url = f"http://127.0.0.1:{port}/"
+            print(f"The panel is already running (version {ver}) at {url}")
+            print("Not starting a second copy. Opening the running one in your browser.")
+            if ver != VERSION:
+                print(f"NOTE: it is an OLDER version ({ver}; this folder has {VERSION}). Close its black window, then start again.")
+            webbrowser.open(url)
+            return
+        print(f"Warning: port {LOCK_PORT} is used by another program, so the one-copy check is off.")
+    srv = None
+    for port in PANEL_PORTS:
         try:
             srv = make_server(port)
             break
         except OSError:
             continue
-    else:
-        print("No free port between 8765 and 8775.")
+    if srv is None:
+        print(f"No free port in {PANEL_PORTS.start}-{PANEL_PORTS.stop - 1}.")
         return
+    pf = ROOT / "logs" / "panel.port"
+    pf.parent.mkdir(exist_ok=True)
+    pf.write_text(str(port), encoding="utf-8")
     url = f"http://127.0.0.1:{port}/"
-    print(f"Panel running at {url}  (keep this window open; Ctrl+C to stop)")
+    print(f"Panel {VERSION} running at {url}  (keep this window open; Ctrl+C to stop)")
     webbrowser.open(url)
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
         print("\nPanel stopped.")
+    finally:
+        try:
+            pf.unlink()
+        except OSError:
+            pass

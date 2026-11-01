@@ -8,6 +8,23 @@ if not exist "..\ZAFVENV\Scripts\activate.bat" (
 )
 call "..\ZAFVENV\Scripts\activate"
 
+rem --- allow only ONE copy of START.bat at a time (the lock file is held open by handle 9 while the menu runs) ---
+if not exist logs mkdir logs
+call :main 9>"logs\start.lock"
+if errorlevel 1 (
+  echo.
+  echo ==================================================
+  echo   Zafaran Agent is ALREADY OPEN in another window.
+  echo   Use that window ^(or close it first^), then start again.
+  echo   If the panel is running, it is at the address shown there.
+  echo ==================================================
+  echo.
+  pause
+)
+exit /b 0
+
+:main
+
 :menu
 cls
 echo ==================================================
@@ -48,6 +65,7 @@ echo  20  AI: fill SEO keyword/title/meta for ALL weak articles
 echo  21  AI: judge link proposals (scores 1-5)
 echo  22  AI: build the tone/style guide from the style pack (run 8 first)
 echo  23  AI: suggest Latin slugs for Persian addresses (review/apply in the panel)
+echo  24  Site health check: technical + WooCommerce, read-only (best in the panel)
 echo.
 echo   0  Exit
 echo.
@@ -76,6 +94,7 @@ if "%c%"=="20" python -m agent.cli aiseo --go
 if "%c%"=="21" python -m agent.cli aijudge --go
 if "%c%"=="22" python -m agent.cli aistyle --go
 if "%c%"=="23" python -m agent.cli aislugs --go
+if "%c%"=="24" python -m agent.cli health
 if "%c%"=="0" exit /b 0
 echo.
 pause

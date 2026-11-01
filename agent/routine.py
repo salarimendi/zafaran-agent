@@ -44,7 +44,7 @@ def _diff(prev, new):
 
 
 def run():
-    from . import audit, cli, export, site
+    from . import audit, cli, export, health, site
     LOGS.mkdir(exist_ok=True)
     REP.mkdir(exist_ok=True)
     now = datetime.now()
@@ -55,7 +55,7 @@ def run():
         conn_ok = ok and not any(s == cli.FAIL for s, _, _ in cli.results)
         steps.append(("بررسی اتصال", conn_ok))
         prev = new = None
-        audit_res = None
+        audit_res = health_res = None
         if conn_ok:
             prev = site.load_snapshot()
             for name, label, fn in (("sync", "همگام‌سازی سایت", site.sync), ("export", "خروجی مقاله‌ها", export.export_articles)):
@@ -63,6 +63,8 @@ def run():
                 steps.append((label, ok))
             ok, audit_res = _step("audit", audit.audit, log)
             steps.append(("گزارش سئو", ok and audit_res is not None))
+            ok, health_res = _step("health", lambda: health.run(None), log)
+            steps.append(("سلامت فنی (خزش فقط‌خواندنی)", ok and health_res is not None))
             new = site.load_snapshot()
         ok_all = all(ok for _, ok in steps)
     # compare with the previous run
@@ -87,6 +89,12 @@ def run():
                 L.append(f"- {code}: 0 ({-old_codes[code]:+d}) ✓ رفع شد")
         L += ["", "بدترین مقاله‌ها:"] + [f"- ({sc}) {t} [id {i}]" for i, t, sc in audit_res["worst"]]
         last.write_text(json.dumps({"codes": audit_res["codes"], "time": now.isoformat(timespec="seconds")}), encoding="utf-8")
+    if health_res:
+        sv = health_res["severity"]
+        L += ["", "## سلامت فنی", f"- جدی: {sv.get('H', 0)}، متوسط: {sv.get('M', 0)}، کم: {sv.get('L', 0)}  (جزئیات: پنل ← سلامت سایت)"]
+        dl = health.delta()
+        ch = sorted(((c, n) for c, n in (dl or {}).items() if n), key=lambda x: -abs(x[1]))[:10]
+        L += [f"- {health.HELP.get(c, c)}: {n:+d}" for c, n in ch] if ch else (["- تغییری نسبت به بررسی قبلی نیست"] if dl else [])
     pend_p = [d for d in (ROOT / "inbox" / "products").glob("*") if d.is_dir() and not d.name.startswith("_") and not (d / "result.json").exists()]
     pend_a = [f for f in (ROOT / "inbox" / "articles").glob("*.md") if not f.name.startswith("_") and not f.with_suffix(".result.json").exists()]
     L += ["", "## منتظر شما", f"- محصول در inbox ارسال‌نشده: {len(pend_p)}", f"- مقاله در inbox ارسال‌نشده: {len(pend_a)}"]

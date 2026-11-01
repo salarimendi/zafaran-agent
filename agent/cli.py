@@ -230,7 +230,7 @@ def main():
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     ap = argparse.ArgumentParser(prog="agent")
-    ap.add_argument("cmd", choices=["check", "diagnose", "products", "articles", "sync", "newterms", "export", "audit", "style", "linkplan", "applylinks", "seotodo", "applyseo", "panel", "routine", "aitest", "aiseo", "aijudge", "aistyle", "aislugs", "applyslugs"])
+    ap.add_argument("cmd", choices=["check", "diagnose", "products", "articles", "sync", "newterms", "export", "audit", "style", "linkplan", "applylinks", "seotodo", "applyseo", "panel", "routine", "aitest", "aiseo", "aijudge", "aistyle", "aislugs", "applyslugs", "health"])
     ap.add_argument("path", nargs="?", help="optional: one product folder / one article file")
     ap.add_argument("--go", action="store_true", help="really send to the site (as DRAFT). Without it: dry run.")
     ap.add_argument("--limit", type=int, default=None, help="ai commands: only the first N items (cheap trial)")
@@ -259,6 +259,12 @@ def main():
             (slugs.ai_slugs(a.go, a.limit) if a.cmd == "aislugs" else slugs.apply_slugs(a.go, a.path))
         except llm.LLMError as e:
             print(f"AI error: {e}")
+    elif a.cmd == "health":
+        from . import health
+        try:
+            health.run(print, limit=a.limit)
+        except RuntimeError as e:
+            print(e)
     elif a.cmd == "routine":
         from . import routine
         sys.exit(0 if routine.run() else 1)
