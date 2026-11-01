@@ -44,7 +44,7 @@ def _diff(prev, new):
 
 
 def run():
-    from . import audit, cli, export, health, site
+    from . import audit, cli, export, health, keywords, occasions, site
     LOGS.mkdir(exist_ok=True)
     REP.mkdir(exist_ok=True)
     now = datetime.now()
@@ -55,7 +55,7 @@ def run():
         conn_ok = ok and not any(s == cli.FAIL for s, _, _ in cli.results)
         steps.append(("بررسی اتصال", conn_ok))
         prev = new = None
-        audit_res = health_res = None
+        audit_res = health_res = kw_res = None
         if conn_ok:
             prev = site.load_snapshot()
             for name, label, fn in (("sync", "همگام‌سازی سایت", site.sync), ("export", "خروجی مقاله‌ها", export.export_articles)):
@@ -65,6 +65,8 @@ def run():
             steps.append(("گزارش سئو", ok and audit_res is not None))
             ok, health_res = _step("health", lambda: health.run(None), log)
             steps.append(("سلامت فنی (خزش فقط‌خواندنی)", ok and health_res is not None))
+            ok, kw_res = _step("keywords", lambda: keywords.build(10, print), log)
+            steps.append(("کلمات کلیدی و شکاف محتوا (بدون AI)", ok and kw_res is not None))
             new = site.load_snapshot()
         ok_all = all(ok for _, ok in steps)
     # compare with the previous run
@@ -95,6 +97,20 @@ def run():
         dl = health.delta()
         ch = sorted(((c, n) for c, n in (dl or {}).items() if n), key=lambda x: -abs(x[1]))[:10]
         L += [f"- {health.HELP.get(c, c)}: {n:+d}" for c, n in ch] if ch else (["- تغییری نسبت به بررسی قبلی نیست"] if dl else [])
+    if kw_res:
+        L += ["", "## کلمات کلیدی و شکاف محتوا"] + keywords.summary_lines(kw_res)
+        if not kw_res["has_gsc"]:
+            L.append("- (خروجی Search Console وارد نشده؛ شکاف مبتنی بر جست‌وجو محاسبه نشد)")
+    try:
+        from .corpus import read_articles
+        soon = [r for r in occasions.calendar(read_articles() or None) if r["days"] <= 75 or r["state"] in ("soon", "late") and r["days"] <= 120]
+        if soon:
+            L += ["", "## مناسبت‌های پیش‌رو (تقویم محتوا)"]
+            for r in soon[:6]:
+                have = "" if r["have"] is None else (" - مقاله ندارید" if not r["have"] else f" - {len(r['have'])} مقاله دارید")
+                L.append(f"- {r['name']}: {r['jalali']}{' (تقریبی)' if r['approx'] else ''} ({r['days']} روز دیگر)؛ انتشار تا {r['publish_jalali']}{have}")
+    except Exception as e:  # the calendar must never break the routine
+        L.append(f"- تقویم محتوا: خطا ({type(e).__name__})")
     pend_p = [d for d in (ROOT / "inbox" / "products").glob("*") if d.is_dir() and not d.name.startswith("_") and not (d / "result.json").exists()]
     pend_a = [f for f in (ROOT / "inbox" / "articles").glob("*.md") if not f.name.startswith("_") and not f.with_suffix(".result.json").exists()]
     L += ["", "## منتظر شما", f"- محصول در inbox ارسال‌نشده: {len(pend_p)}", f"- مقاله در inbox ارسال‌نشده: {len(pend_a)}"]

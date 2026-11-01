@@ -238,6 +238,171 @@ def gsc_page(output="", min_impr=10):
 
 
 def _tbl(title, heads, rows, tip=""):
-    t = f"<h2>{title}</h2>" + (f"<p class='muted'>{tip}</p>" if tip else "")
+    t = (f"<h2>{title}</h2>" if title else "") + (f"<p class='muted'>{tip}</p>" if tip else "")
     return (t + "<table><tr>" + "".join(f"<th>{h}</th>" for h in heads) + "</tr>"
             + "".join("<tr>" + "".join(f"<td>{c}</td>" for c in r) + "</tr>" for r in rows) + "</table>")
+
+
+# ---------------------------------------------------------------- Keywords / content gaps / calendar (stage 3)
+def keywords_page(output="", min_impr=10, st="gap"):
+    P = _P()
+    from . import keywords as kw, occasions, gsc
+    from .corpus import read_articles
+    from .site import load_snapshot
+    E, form, btn, link = P.E, P.form, P.btn, P.link
+    body = ("<h1>کلمات کلیدی، شکاف محتوا و تقویم</h1><p class='muted'>همه‌چیز با کد و از داده‌های خودتان (مقاله‌ها، دسته‌ها، خروجی Search Console) ساخته می‌شود؛ "
+            "هیچ‌چیز روی سایت تغییر نمی‌کند و AI فقط در یک دکمهٔ جدا و با تأیید شما (برآورد هزینه اول) مصرف می‌شود.</p>")
+    res = kw.load_analysis()
+    snap, arts, gfiles = load_snapshot(), read_articles(), gsc.saved()
+    ok = lambda b: "✓" if b else "○"
+    body += (f"<div class='box'><b>ورودی‌ها:</b> {ok(snap)} همگام‌سازی سایت &nbsp; {ok(arts)} خروجی مقاله‌ها ({len(arts)}) &nbsp; "
+             f"{ok(gfiles)} Search Console ({len(gfiles)} خروجی؛ <a href='/gsc'>صفحهٔ Search Console</a>)<br>"
+             + form("/kwbuild", f"حداقل نمایش برای فهرست‌ها: <input name='min' value='{min_impr}' style='width:60px'> "
+                    + btn("x", "ساخت/به‌روزرسانی تحلیل (فقط می‌خواند، بدون AI)")) + "</div>")
+    if output:
+        body += P.out_box(output)
+    if not snap:
+        body += "<div class='box'>اول در صفحهٔ خانه «همگام‌سازی سایت» (و بعد «خروجی مقاله‌ها») را اجرا کنید.</div>"
+    if res:
+        c = {}
+        for r in res["bank"]:
+            c[r["status"]] = c.get(r["status"], 0) + 1
+        body += (f"<p class='muted'>آخرین ساخت: {E(res['built'][:16].replace('T', ' '))}"
+                 + (f" · داده Search Console: {E(res['gsc_file'])} ({res.get('gsc_days') or '؟'} روز)" if res["has_gsc"] else " · بدون داده Search Console")
+                 + f" · {res['n_docs']} صفحهٔ شناخته‌شده</p>"
+                 f"<div class='box'>بانک: <b>{len(res['bank'])}</b> عبارت · پوشش کامل <b>{c.get('covered', 0)}</b> · پوشش ضعیف <b>{c.get('weak', 0)}</b> · "
+                 f"شکاف <b>{c.get('gap', 0)}</b> · برند {c.get('brand', 0)}<br>"
+                 f"هم‌نوع‌خواری: <b>{len(res['cannibal_focus'])}</b> گروه کلمه کلیدی مشابه، <b>{len(res['cannibal_queries'])}</b> عبارت با چند صفحهٔ رقیب · "
+                 f"فایل‌های کامل: reports\\keywords_bank.csv، content_gaps.csv، keywords_cannibal.csv</div>"
+                 "<p>پرش: <a href='#gaps'>شکاف محتوا</a> · <a href='#cannibal'>هم‌نوع‌خواری</a> · <a href='#map'>نقشهٔ کلمه←صفحه</a> · "
+                 "<a href='#rising'>در حال رشد</a> · <a href='#calendar'>تقویم</a> · <a href='#manual'>کلمات دستی</a></p>")
+        body += _kw_gaps(P, res, E, form, btn, link)
+        body += _kw_cannibal(res, E, link)
+        body += _kw_map(res, E, link, st, min_impr)
+        body += _kw_rising(res, E)
+    body += _kw_calendar(P, arts, E, link)
+    man = kw.MANUAL.read_text(encoding="utf-8") if kw.MANUAL.exists() else ""
+    body += ("<h2 id='manual'>کلمات کلیدی دستی</h2><p class='muted'>هر خط یک عبارت که می‌خواهید در بانک و بررسی شکاف دیده شود (مثلاً از ابزار رقبا یا ذهن خودتان). "
+             "این فقط یک فایل محلی است (knowledge\\keywords\\manual.txt)؛ بعد از ذخیره «ساخت/به‌روزرسانی تحلیل» را بزنید.</p>"
+             + form("/kwsave", f"<textarea name='manual' style='direction:rtl;min-height:120px'>{E(man)}</textarea><br>" + btn("save", "ذخیره", "alt")))
+    return P.page("کلمات کلیدی", body)
+
+
+def _kw_gaps(P, res, E, form, btn, link):
+    from . import keywords as kw
+    t = ("<h2 id='gaps'>شکاف محتوا (عبارت‌هایی که نمایش می‌گیرند ولی صفحه‌ای برایشان نیست)</h2>"
+         "<p class='muted'>عبارت‌های Search Console که هیچ مقاله/محصول/دسته‌ای بیش از نصف آن‌ها را پوشش نمی‌دهد، با کد دسته‌بندی شده‌اند. "
+         "هر ردیف یک فرصت: مقاله یا دستهٔ جدید. «نیت» یعنی جویندهٔ خرید است یا اطلاعات.</p>")
+    cl = res["gap_clusters"]
+    if not res["has_gsc"]:
+        t += "<div class='box'>برای این بخش خروجی Search Console لازم است (<a href='/gsc'>راهنما</a>).</div>"
+    elif not cl:
+        t += "<p>✓ عبارتی بدون صفحه پیدا نشد.</p>"
+    else:
+        t += _tbl("", ["موضوع (پرنمایش‌ترین عبارت)", "نمایش", "کلیک", "رتبه", "نیت", "پیشنهاد", "عبارت‌های دیگر"],
+                          [[E(c["label"]), c["impr"], c["clicks"], c["pos"], kw.INTENT_FA[c["intent"]], E(c["suggest"]),
+                            "<span class='muted'>" + E("؛ ".join(q["key"] for q in c["queries"][1:5])) + (f" (+{c['n'] - 5})" if c["n"] > 5 else "") + "</span>"] for c in cl[:40]])
+        t += ("<div class='box'><b>خوشه‌بندی معنایی و پیشنهاد موضوع با AI</b> (یک تماس دسته‌ای؛ فقط ایده، چیزی روی سایت تغییر نمی‌کند):<br>"
+              + _inline(form("/run", '<input type="hidden" name="action" value="ai_gap_est">' + btn("x", "برآورد هزینه", "alt")))
+              + _inline(form("/run", '<input type="hidden" name="action" value="ai_gap">' + P.confirm_box("ai") + btn("x", "پیشنهاد موضوع با AI")))
+              + "</div>")
+    ai = kw.KW / "topics_ai.json"
+    if ai.exists():
+        try:
+            d = json.loads(ai.read_text(encoding="utf-8"))
+        except ValueError:
+            d = None
+        if d and d.get("items"):
+            TY = {"article": "مقاله", "category": "دستهٔ محصول", "product": "محصول"}
+            t += _tbl(f"پیشنهاد AI ({E(d['built'][:16].replace('T', ' '))}، هزینه ${d.get('cost', 0)})", ["نوع", "عنوان پیشنهادی", "کلمه کلیدی", "نمایش", "از عبارت‌های", "هشدار"],
+                      [[TY.get(i["type"], E(str(i["type"]))), E(i["t"]), E(i["k"]), i["impr"], "<span class='muted'>" + E("؛ ".join(i["queries"][:3])) + "</span>",
+                        f"<span style='color:#a65f00'>{E(i['notes'])}</span>" if i["notes"] else "✓"] for i in d["items"]],
+                      "این‌ها فقط ایده‌اند. برای نوشتن، مرحلهٔ ۴ نقشهٔ راه (موتور تولید مقاله) در راه است؛ فعلاً می‌توانید از همین‌ها بریف بسازید.")
+    if res["cats_without_article"]:
+        t += _tbl("دستهٔ محصولی که هیچ مقالهٔ پشتیبانی ندارد", ["دسته", "تعداد محصول"],
+                  [[link(x["url"], x["name"]) if x["url"] else E(x["name"]), x["count"]] for x in res["cats_without_article"][:30]],
+                  "مقالهٔ راهنما برای این دسته‌ها هم ترافیک اطلاعاتی می‌آورد و هم بعداً در مرحلهٔ لینک‌دهی به صفحهٔ دسته لینک می‌دهد.")
+    if res["gap_manual"]:
+        t += _tbl("کلمات دستی شما که پوشش کامل ندارند", ["عبارت", "امتیاز پوشش"], [[E(r["key"]), f"{round(r['score'] * 100)}٪"] for r in res["gap_manual"]])
+    return t
+
+
+def _kw_cannibal(res, E, link):
+    t = ("<h2 id='cannibal'>هم‌نوع‌خواری (چند صفحه برای یک موضوع)</h2>"
+         "<p class='muted'>وقتی دو مقاله برای یک عبارت می‌جنگند، گوگل هر بار یکی را نشان می‌دهد و هیچ‌کدام رتبهٔ خوب نمی‌گیرد. معمولاً درمان: یکی را تقویت و دیگری را به آن لینک یا ادغام کنید، "
+         "یا کلمه کلیدی یکی را عوض کنید (صفحهٔ «کلمه کلیدی و متا»). توجه: خروجی Search Console «کدام صفحه برای کدام عبارت» را نمی‌دهد، پس بخش دوم بر اساس موضوع صفحه‌ها حدس می‌زند، نه آمار قطعی.</p>")
+    g = res["cannibal_focus"]
+    if g:
+        t += _tbl("کلمه کلیدی یکسان یا بسیار شبیه بین مقاله‌ها", ["شدت", "کلمه کلیدی", "مقاله‌ها"],
+                  [["<b style='color:#b3261e'>یکسان</b>" if x["exact"] else "<b style='color:#a65f00'>شبیه</b>", E(x["label"]),
+                    "<br>".join(link(p["url"], p["title"]) + f" <span class='muted'>({E(p['focus'])})</span>" for p in x["pages"])] for x in g])
+    else:
+        t += "<p>✓ دو مقاله کلمه کلیدی یکسان یا بسیار شبیه ندارند.</p>"
+    q = res["cannibal_queries"]
+    if q:
+        t += _tbl("عبارت‌هایی که چند صفحه دربارهٔ آن‌اند", ["عبارت", "نمایش", "رتبه", "صفحه‌های رقیب"],
+                  [[E(x["query"]), x["impr"], x["pos"], "<br>".join(link(p["url"], p["title"]) + f" <span class='muted'>({kwk(p['kind'])})</span>" for p in x["pages"])] for x in q[:30]])
+    return t
+
+
+def kwk(kind):
+    from . import keywords as kw
+    return kw.KIND_FA.get(kind, kind)
+
+
+def _kw_map(res, E, link, st, min_impr):
+    from . import keywords as kw
+    ST = {"covered": ("پوشش کامل", "#1b6e3c"), "weak": ("پوشش ضعیف", "#a65f00"), "gap": ("شکاف", "#b3261e"), "brand": ("برند", "#6b5b4b")}
+    flt = {"gap": lambda r: r["status"] == "gap", "weak": lambda r: r["status"] == "weak", "covered": lambda r: r["status"] == "covered",
+           "mismatch": lambda r: r["mismatch"], "all": lambda r: True}.get(st, lambda r: r["status"] == "gap")
+    rows = [r for r in res["bank"] if flt(r)]
+    nav = " · ".join(f"<b>{lab}</b>" if k == st else f"<a href='/keywords?st={k}&min={min_impr}#map'>{lab}</a>"
+                     for k, lab in (("gap", "شکاف"), ("weak", "ضعیف"), ("covered", "پوشش کامل"), ("mismatch", "ناهماهنگ با نیت"), ("all", "همه")))
+    t = (f"<h2 id='map'>نقشهٔ کلمه ← صفحهٔ هدف ({len(rows)} مورد)</h2><p class='muted'>برای هر کلمه، مناسب‌ترین صفحه (بر اساس پوشش واژه‌ها). {nav}<br>"
+         "«ناهماهنگ با نیت»: جویندهٔ خرید به مقاله می‌رسد یا جویندهٔ اطلاعات به صفحهٔ محصول. ۸۰ ردیف اول؛ فایل کامل: reports\\keywords_bank.csv</p>")
+    t += _tbl("", ["کلمه", "منبع", "نمایش", "کلیک", "رتبه", "نیت", "صفحهٔ هدف", "پوشش"],
+              [[E(r["key"]), E("+".join({"gsc": "GSC", "focus": "کلمه کلیدی", "term": "دسته/برچسب", "manual": "دستی"}.get(s, s) for s in r["sources"])), r["impr"] or "", r["clicks"] or "",
+                r["pos"] or "", kw.INTENT_FA[r["intent"]] + (" ⚠" if r["mismatch"] else ""),
+                (("<span class='muted'>نزدیک‌ترین (ضعیف): </span>" if r["status"] == "gap" else "") + link(r["target"]["url"], r["target"]["title"])
+                 + f" <span class='muted'>({kwk(r['target']['kind'])})</span>") if r["target"] else "—",
+                f"<b style='color:{ST[r['status']][1]}'>{ST[r['status']][0]}</b> {round(r['score'] * 100)}٪"] for r in rows[:80]])
+    return t
+
+
+def _kw_rising(res, E):
+    rs = res["rising"]
+    t = "<h2 id='rising'>عبارت‌های در حال رشد (نسخهٔ سبک «رادار ترند»)</h2>"
+    if rs["note"]:
+        return t + f"<p class='muted'>{E(rs['note'])}</p>"
+    if not rs["rows"]:
+        return t + "<p class='muted'>نسبت به خروجی قبلی رشد قابل‌توجهی دیده نشد.</p>"
+    return t + _tbl("", ["عبارت", "نمایش قبلی", "نمایش فعلی", "رشد", "رتبه"],
+                    [[E(r["key"]) + (" <b>(جدید)</b>" if r["new"] else ""), r["before"], r["impr"], f"+{r['gain']}", r["pos"]] for r in rs["rows"][:25]],
+                    "عبارتی که جست‌وجویش بالا می‌رود؛ اگر صفحه‌ای برایش ندارید در بخش شکاف هم آمده است.")
+
+
+def _kw_calendar(P, arts, E, link):
+    from . import occasions as oc
+    ST = {"late": ("⚠ باید زودتر منتشر می‌شد؛ همین حالا", "#b3261e"), "soon": ("الان وقت شروع است", "#a65f00"), "later": ("هنوز زود است", "#6b5b4b")}
+    try:
+        rows = oc.calendar(arts or None)
+    except ValueError as e:
+        return f"<h2 id='calendar'>تقویم محتوا</h2><div class='box' style='color:#b3261e'>{E(str(e))}</div>"
+    t = (f"<h2 id='calendar'>تقویم محتوا (یک سال آینده)</h2><p class='muted'>مناسبت‌های ثابت از فایل knowledge\\keywords\\occasions.yaml (قابل ویرایش). "
+         "«انتشار تا» = تاریخی که مقاله باید منتشر و ایندکس شده باشد. تاریخ‌های قمری تقریبی‌اند (۱ تا ۲ روز جابه‌جایی). "
+         "پوشش با کد بررسی می‌شود: عنوان/کلمه کلیدی/تیترهای مقاله‌های منتشرشده.</p>")
+    trs = []
+    for r in rows:
+        lab, col = ST[r["state"]]
+        if r["have"] is None:
+            cov = "<span class='muted'>بررسی نشد (خروجی مقاله‌ها)</span>"
+        elif not r["have"]:
+            cov = "<b style='color:#b3261e'>مقاله ندارید</b>"
+        else:
+            cov = f"{len(r['have'])} مقاله: " + "<br>".join(link(h["url"], h["title"]) for h in r["have"][:3])
+            if r["stale_days"] is not None and r["stale_days"] > 300:
+                cov += f"<br><span style='color:#a65f00'>آخرین ویرایش {r['stale_days']} روز پیش؛ به‌روزرسانی کنید</span>"
+        trs.append([f"<b>{E(r['name'])}</b>", f"{E(r['jalali'])}{' (تقریبی)' if r['approx'] else ''}<br><span class='muted'>{r['date']}</span>", r["days"],
+                    f"{E(r['publish_jalali'])}<br><span class='muted'>{r['publish_by']}</span>", f"<b style='color:{col}'>{lab}</b>", cov,
+                    "<br>".join("· " + E(x) for x in r["topics"][:3])])
+    return t + _tbl("", ["مناسبت", "تاریخ", "روز مانده", "انتشار تا", "وضعیت", "پوشش فعلی", "ایدهٔ موضوع"], trs)

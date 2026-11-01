@@ -230,10 +230,11 @@ def main():
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     ap = argparse.ArgumentParser(prog="agent")
-    ap.add_argument("cmd", choices=["check", "diagnose", "products", "articles", "sync", "newterms", "export", "audit", "style", "linkplan", "applylinks", "seotodo", "applyseo", "panel", "routine", "aitest", "aiseo", "aijudge", "aistyle", "aislugs", "applyslugs", "health"])
+    ap.add_argument("cmd", choices=["check", "diagnose", "products", "articles", "sync", "newterms", "export", "audit", "style", "linkplan", "applylinks", "seotodo", "applyseo", "panel", "routine", "aitest", "aiseo", "aijudge", "aistyle", "aislugs", "applyslugs", "health", "keywords", "calendar", "aigap"])
     ap.add_argument("path", nargs="?", help="optional: one product folder / one article file")
     ap.add_argument("--go", action="store_true", help="really send to the site (as DRAFT). Without it: dry run.")
     ap.add_argument("--limit", type=int, default=None, help="ai commands: only the first N items (cheap trial)")
+    ap.add_argument("--min", type=int, default=10, help="keywords: minimum impressions for lists (default 10)")
     ap.add_argument("--all", action="store_true", help="export: include drafts/private, not only published")
     a = ap.parse_args()
     if a.cmd == "check":
@@ -247,10 +248,10 @@ def main():
         from . import proposals as pr
         {"linkplan": lambda: pr.link_plan(), "applylinks": lambda: pr.apply_links(a.go, a.path),
          "seotodo": lambda: pr.seo_todo(), "applyseo": lambda: pr.apply_seo(a.go, a.path)}[a.cmd]()
-    elif a.cmd in ("aitest", "aiseo", "aijudge", "aistyle"):
+    elif a.cmd in ("aitest", "aiseo", "aijudge", "aistyle", "aigap"):
         from . import ai, llm
         try:
-            {"aitest": lambda: llm.ping(), "aiseo": lambda: ai.ai_seo(a.go, a.limit), "aijudge": lambda: ai.ai_judge(a.go, a.path, a.limit), "aistyle": lambda: ai.ai_style(a.go)}[a.cmd]()
+            {"aitest": lambda: llm.ping(), "aiseo": lambda: ai.ai_seo(a.go, a.limit), "aijudge": lambda: ai.ai_judge(a.go, a.path, a.limit), "aistyle": lambda: ai.ai_style(a.go), "aigap": lambda: ai.ai_gap(a.go)}[a.cmd]()
         except llm.LLMError as e:
             print(f"AI error: {e}")
     elif a.cmd in ("aislugs", "applyslugs"):
@@ -264,6 +265,19 @@ def main():
         try:
             health.run(print, limit=a.limit)
         except RuntimeError as e:
+            print(e)
+    elif a.cmd == "keywords":
+        from . import keywords
+        try:
+            keywords.build(a.min, print)
+            print("\nفایل‌ها: reports\\keywords_bank.csv ، content_gaps.csv ، keywords_cannibal.csv  (مرور کامل‌تر: پنل ← کلمات کلیدی و تقویم)")
+        except ValueError as e:
+            print(e)
+    elif a.cmd == "calendar":
+        from . import occasions
+        try:
+            occasions.run(print)
+        except ValueError as e:
             print(e)
     elif a.cmd == "routine":
         from . import routine

@@ -71,8 +71,8 @@ def edit_link(url, pid):
     return ""
 
 
-VERSION = "12"
-NAV = [("/", "خانه"), ("/health", "سلامت سایت"), ("/gsc", "Search Console"), ("/style", "لحن نوشتار"), ("/seo", "کلمه کلیدی و متا"), ("/links", "لینک‌دهی داخلی"), ("/slugs", "آدرس‌ها (slug)"), ("/inbox", "محصول و مقاله جدید"), ("/reports", "گزارش سئو"), ("/roadmap", "نقشهٔ راه")]
+VERSION = "13"
+NAV = [("/", "خانه"), ("/health", "سلامت سایت"), ("/gsc", "Search Console"), ("/keywords", "کلمات کلیدی و تقویم"), ("/style", "لحن نوشتار"), ("/seo", "کلمه کلیدی و متا"), ("/links", "لینک‌دهی داخلی"), ("/slugs", "آدرس‌ها (slug)"), ("/inbox", "محصول و مقاله جدید"), ("/reports", "گزارش سئو"), ("/roadmap", "نقشهٔ راه")]
 
 
 JOBS = {}
@@ -132,6 +132,8 @@ def actions():
         "ai_seo": ("پر کردن سئو با AI", lambda: ai.ai_seo(True), True),
         "ai_judge_est": ("برآورد هزینهٔ ارزیابی لینک‌ها", lambda: ai.ai_judge(False), False),
         "ai_judge": ("ارزیابی لینک‌ها با AI", lambda: ai.ai_judge(True), True),
+        "ai_gap_est": ("برآورد هزینهٔ پیشنهاد موضوع", lambda: ai.ai_gap(False), False),
+        "ai_gap": ("پیشنهاد موضوع برای شکاف محتوا با AI", lambda: ai.ai_gap(True), True),
     }
 
 
@@ -189,6 +191,7 @@ def workflow():
             pass
     from . import gsc as gsc_mod
     gsc_saved = gsc_mod.saved()
+    kwa = K / "keywords" / "analysis.json"
     I = lambda p: _mt(p) if p.exists() else "هنوز انجام نشده"
     # key, title, done?, info, kind, target, prerequisites(keys)
     return [
@@ -199,6 +202,7 @@ def workflow():
         ("health", "سلامت فنی سایت و محصولات (خزش فقط‌خواندنی)", bool(hrep),
          (f"{hrep['time'][:16].replace('T', ' ')} - {hrep['severity'].get('H', 0)} مورد جدی" if hrep else "هنوز انجام نشده"), "page", "/health", ["sync"]),
         ("gsc", "Search Console (خروجی Performance، بدون حساب سرویس)", bool(gsc_saved), (_mt(gsc_saved[-1]) if gsc_saved else "هنوز انجام نشده"), "page", "/gsc", []),
+        ("keywords", "کلمات کلیدی، شکاف محتوا و تقویم (بدون AI؛ AI اختیاری)", kwa.exists(), _mt(kwa) if kwa.exists() else "هنوز انجام نشده", "page", "/keywords", ["export"]),
         ("pack", "بستهٔ لحن (آمار نوشتار شما)", pack.exists(), I(pack), "run", "style", ["export"]),
         ("guide", "راهنمای لحن (ویرایش دستی / پیش‌نویس AI)", guide.exists(), I(guide), "page", "/style", ["pack"]),
         ("seo", "کلمه کلیدی، عنوان سئو و متا", ans.exists(), _mt(ans) + " (آخرین پیشنهاد)" if ans.exists() else "هر زمان", "page", "/seo", ["export"]),
@@ -328,6 +332,11 @@ def roadmap_page(output=""):
     f = ROOT / "ROADMAP.md"
     txt = f.read_text(encoding="utf-8") if f.exists() else "ROADMAP.md پیدا نشد."
     return page("نقشهٔ راه", "<div class='box' style='line-height:2'>" + markdown.markdown(txt, extensions=["extra", "sane_lists"]) + "</div>")
+
+
+def keywords_page(output=""):
+    from . import panel_extra as px
+    return px.keywords_page(output)
 
 
 def style_page(output=""):
@@ -666,6 +675,14 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, f"zafaran-panel {VERSION}")
         if path == "/healthrun":
             return self._redirect("/health")
+        if path == "/keywords":
+            from . import panel_extra as px
+            q = parse_qs(urlparse(self.path).query)
+            try:
+                mi = max(1, int(q.get("min", ["10"])[0]))
+            except ValueError:
+                mi = 10
+            return self._send(200, px.keywords_page(min_impr=mi, st=q.get("st", ["gap"])[0]))
         if path in ("/healthfix", "/gsc"):
             from . import panel_extra as px
             q = parse_qs(urlparse(self.path).query)
@@ -714,7 +731,7 @@ class Handler(BaseHTTPRequestHandler):
             back = {"linkplan": links_page, "seotodo": seo_page, "ai_judge": links_page, "ai_judge_est": links_page,
                     "ai_seo": seo_page, "ai_seo_est": seo_page, "ai_seo3": seo_page, "ai_style": style_page, "style": style_page,
                     "ai_slugs": slugs_page, "ai_slugs_est": slugs_page, "inbox_dry": inbox_page, "inbox_send": inbox_page,
-                    "audit": reports_page}.get(one("action"), home)
+                    "audit": reports_page, "ai_gap": keywords_page, "ai_gap_est": keywords_page}.get(one("action"), home)
             return self._send(200, back(txt))
         if path == "/links":
             name = one("file")
@@ -785,6 +802,17 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, px.gsc_page(f"خطا: {e}"))
             px.FLASH["gsc"] = msg
             return self._redirect("/gsc")
+        if path == "/kwbuild":
+            from . import keywords as kw, panel_extra as px
+            try:
+                mi = max(1, int(one("min") or 10))
+            except ValueError:
+                mi = 10
+            return self._send(200, px.keywords_page(run(lambda: kw.build(mi, print)), min_impr=mi))
+        if path == "/kwsave":
+            from . import keywords as kw
+            kw.save_manual(one("manual"))
+            return self._send(200, keywords_page("کلمات دستی ذخیره شد. برای دیدن اثرشان «ساخت/به‌روزرسانی تحلیل» را بزنید."))
         if path == "/terms":
             import hashlib, yaml
             from . import site

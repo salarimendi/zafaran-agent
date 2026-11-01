@@ -66,6 +66,9 @@ echo  21  AI: judge link proposals (scores 1-5)
 echo  22  AI: build the tone/style guide from the style pack (run 8 first)
 echo  23  AI: suggest Latin slugs for Persian addresses (review/apply in the panel)
 echo  24  Site health check: technical + WooCommerce, read-only (best in the panel)
+echo  25  Keywords: bank, target map, cannibalization, content gaps (read-only, no AI; best in the panel)
+echo  26  Content calendar of fixed occasions (Nowruz, Yalda, Ramadan, harvest ...)
+echo  27  AI: suggest topics for the content gaps (ONE call; run 25 first)
 echo.
 echo   0  Exit
 echo.
@@ -95,6 +98,9 @@ if "%c%"=="21" python -m agent.cli aijudge --go
 if "%c%"=="22" python -m agent.cli aistyle --go
 if "%c%"=="23" python -m agent.cli aislugs --go
 if "%c%"=="24" python -m agent.cli health
+if "%c%"=="25" python -m agent.cli keywords
+if "%c%"=="26" python -m agent.cli calendar
+if "%c%"=="27" python -m agent.cli aigap --go
 if "%c%"=="0" exit /b 0
 echo.
 pause

@@ -27,6 +27,10 @@ knowledge/*
 knowledge/style/*
 !knowledge/style/style_guide.md
 !knowledge/style/style_pack.md
+!knowledge/keywords/
+knowledge/keywords/*
+!knowledge/keywords/occasions.yaml
+!knowledge/keywords/manual.txt
 
 # ===== your working inbox (keep only the samples / folder markers) =====
 inbox/products/*

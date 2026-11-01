@@ -205,3 +205,86 @@ def ai_style(go):
     out.write_text(text.strip() + "\n", encoding="utf-8")
     print(f"Saved {out} ({len(text)} chars). Cost: ${info['cost']:.4f}.")
     print("This is only a DRAFT: it does NOT replace your main guide (style_guide.md). In the panel (Tone page) you can compare and choose.")
+
+
+GAP_SYS = ("تو استراتژیست محتوای سئوی فارسی برای یک فروشگاه زعفران هستی. هر خط یک خوشه از عبارت‌های جست‌وجو است که سایت صفحه‌ای برایشان ندارد: "
+           "شماره|عبارت اصلی|مجموع نمایش|نیت(info/commercial/unknown)|چند عبارت نمونه. خوشه‌هایی که یک نیت جست‌وجو دارند را ادغام کن و برای هر گروه یک موضوع پیشنهاد بده: "
+           "g = آرایهٔ شمارهٔ خوشه‌ها، type = article یا category یا product، t = عنوان پیشنهادی (حداکثر ۶۰ کاراکتر)، k = کلمه کلیدی کانونی (۲ تا ۴ کلمه). "
+           "هر شماره فقط در یک گروه بیاید. ادعای درمانی و پزشکی ننویس. فقط یک آرایهٔ JSON از اشیای {\"g\":[..],\"type\":\"\",\"t\":\"\",\"k\":\"\"}؛ هیچ توضیح دیگری ننویس.")
+OUT_PER_GROUP = 70
+
+
+def _gap_input(cl):
+    return "\n".join(f"{c['id']}|{c['label']}|{c['impr']}|{c['intent'] if c['intent'] in ('info', 'commercial') else 'unknown'}|" + ";".join(q["key"] for q in c["queries"][1:4])
+                     for c in cl)
+
+
+def _gap_problems(r, valid, used, focus):
+    from . import keywords as kw
+    p = []
+    g = r.get("g")
+    if not isinstance(g, list) or not g or not all(isinstance(x, int) and x in valid for x in g):
+        p.append("شمارهٔ خوشه نامعتبر است")
+    elif any(x in used for x in g):
+        p.append("یک خوشه در دو گروه آمده است")
+    if r.get("type") not in ("article", "category", "product"):
+        p.append("type باید article یا category یا product باشد")
+    t, k = str(r.get("t", "")).strip(), str(r.get("k", "")).strip()
+    if not t or len(t) > 60:
+        p.append(f"عنوان {len(t)} کاراکتر است (حداکثر ۶۰)")
+    if not k or not 1 <= len(k.split()) <= 5:
+        p.append("کلمه کلیدی باید ۱ تا ۵ کلمه باشد")
+    elif k:
+        kt = kw.topic_set(k)
+        for fk in focus:
+            if norm(fk) == norm(k) or (len(kt) >= 2 and kw.jacc(kt, kw.topic_set(fk)) >= 0.66):
+                p.append(f"کلمه کلیدی شبیه کلمه کلیدی مقالهٔ موجود است: «{fk}» (هم‌نوع‌خواری)")
+                break
+    return p
+
+
+def ai_gap(go):
+    """ONE batched call: regroup the code-made gap clusters semantically and suggest topics. Nothing is sent to the website."""
+    from . import keywords as kw
+    c = llm.cfg()
+    res = kw.load_analysis()
+    if not res or not res.get("gap_clusters"):
+        print("No content-gap clusters yet. Build the keyword analysis first (needs a Search Console import).")
+        return
+    n_max = max(5, min(30, (c["max_out"] - 60) // OUT_PER_GROUP))
+    cl = res["gap_clusters"][:n_max]
+    msgs = [{"role": "system", "content": GAP_SYS}, {"role": "user", "content": _gap_input(cl)}]
+    est_in = llm.est_tokens(sum(len(m["content"]) for m in msgs))
+    est_out = min(c["max_out"], len(cl) * OUT_PER_GROUP + 60)
+    print(f"{len(cl)} gap cluster(s) (top by impressions; max {n_max} fit one answer at LLM_MAX_OUTPUT_TOKENS={c['max_out']}), 1 call.")
+    _brief(c, 1, est_in, est_out)
+    if not go:
+        print("Estimate only (nothing sent).")
+        return
+    if not confirm(1, "AI call", to="to the AI provider (spends credit; NOTHING is sent to your website)"):
+        print("Cancelled.")
+        return
+    text, info = llm.chat(msgs, max_out=est_out, task="gap")
+    valid, used, items = {x["id"] for x in cl}, set(), []
+    focus = [d["focus"] for d in kw.build_docs() if d["kind"] == "article" and d["focus"]]
+    byid = {x["id"]: x for x in cl}
+    for r in llm.parse_json_list(text):
+        if not isinstance(r, dict):
+            continue
+        pb = _gap_problems(r, valid, used, focus)
+        g = [x for x in r.get("g", []) if isinstance(x, int) and x in valid and x not in used] if isinstance(r.get("g"), list) else []
+        if not g:
+            continue
+        used.update(g)
+        qs = [q for x in g for q in byid[x]["queries"]]
+        items.append({"g": g, "type": r.get("type", ""), "t": str(r.get("t", "")).strip(), "k": str(r.get("k", "")).strip(),
+                      "impr": sum(byid[x]["impr"] for x in g), "queries": [q["key"] for q in qs[:6]], "notes": "؛ ".join(pb)})
+    left = [x for x in valid if x not in used]
+    out = kw.KW / "topics_ai.json"
+    if out.exists():
+        out.rename(kw.KW / f"topics_ai_prev_{datetime.now():%Y%m%d_%H%M%S}.json")
+    out.write_text(json.dumps({"built": datetime.now().isoformat(timespec="seconds"), "cost": round(info["cost"], 6), "left_out": left,
+                               "items": sorted(items, key=lambda x: -x["impr"])}, ensure_ascii=False), encoding="utf-8")
+    clean = sum(1 for i in items if not i["notes"])
+    print(f"\n{len(items)} topic suggestion(s) saved ({clean} pass all checks; the others carry a note). Cost this run: ${info['cost']:.4f}")
+    print("This is only a list of IDEAS: nothing was written to the site. Review it in the panel (Keywords page).")
