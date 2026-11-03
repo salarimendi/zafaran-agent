@@ -230,7 +230,7 @@ def main():
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     ap = argparse.ArgumentParser(prog="agent")
-    ap.add_argument("cmd", choices=["check", "diagnose", "products", "articles", "sync", "newterms", "export", "audit", "style", "linkplan", "applylinks", "seotodo", "applyseo", "panel", "routine", "aitest", "aiseo", "aijudge", "aistyle", "aislugs", "applyslugs", "health", "keywords", "calendar", "aigap"])
+    ap.add_argument("cmd", choices=["check", "diagnose", "products", "articles", "sync", "newterms", "export", "audit", "style", "linkplan", "applylinks", "seotodo", "applyseo", "panel", "routine", "aitest", "aiseo", "aijudge", "aistyle", "aislugs", "applyslugs", "health", "keywords", "calendar", "aigap", "graph", "graphlinks"])
     ap.add_argument("path", nargs="?", help="optional: one product folder / one article file")
     ap.add_argument("--go", action="store_true", help="really send to the site (as DRAFT). Without it: dry run.")
     ap.add_argument("--limit", type=int, default=None, help="ai commands: only the first N items (cheap trial)")
@@ -272,6 +272,16 @@ def main():
             keywords.build(a.min, print)
             print("\nفایل‌ها: reports\\keywords_bank.csv ، content_gaps.csv ، keywords_cannibal.csv  (مرور کامل‌تر: پنل ← کلمات کلیدی و تقویم)")
         except ValueError as e:
+            print(e)
+    elif a.cmd in ("graph", "graphlinks"):
+        from . import linkgraph
+        try:
+            res = linkgraph.build(print)
+            if a.cmd == "graphlinks":
+                linkgraph.suggest(res)
+            else:
+                print("\nگزارش: reports\\link_graph.md و link_graph_nodes.csv (مرور کامل‌تر: پنل ← گراف لینک)")
+        except Exception as e:
             print(e)
     elif a.cmd == "calendar":
         from . import occasions

@@ -185,7 +185,8 @@ def sync():
     prods = fetch_all(c, "wc/v3/products", "wc", {"status": "any"})
     snap["products"] = [{"id": p["id"], "status": p["status"], "name": _t(p["name"]), "sku": p.get("sku", ""),
                          "slug": unquote(p.get("slug", "")), "url": p.get("permalink", ""), "price": p.get("price", ""),
-                         "categories": [_t(x["name"]) for x in p.get("categories", [])]} for p in prods]
+                         "categories": [_t(x["name"]) for x in p.get("categories", [])],
+                         "stock_status": p.get("stock_status", ""), "manage_stock": bool(p.get("manage_stock")), "stock_quantity": p.get("stock_quantity")} for p in prods]
     print(f"  posts: {len(posts)}  pages: {len(pages)}  products: {len(prods)}")
     _write_csv("posts.csv", ["id", "status", "title", "slug", "url", "categories", "date", "modified"],
                [[p["id"], p["status"], p["title"], p["slug"], p["url"], "; ".join(p["categories"]), p["date"], p["modified"]]

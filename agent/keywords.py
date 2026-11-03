@@ -67,6 +67,15 @@ def intent_of(q, brand=False):
 
 
 # ------------------------------------------------------------------ documents (pages that can be a keyword's target)
+def in_stock(p):
+    """True only when the product is known to be available. Zero stock, out-of-stock status or an old snapshot without stock data (re-sync!) -> False."""
+    st = p.get("stock_status")
+    if st not in ("instock", "onbackorder"):
+        return False
+    q = p.get("stock_quantity")
+    return not (p.get("manage_stock") and q is not None and q <= 0 and st != "onbackorder")
+
+
 def build_docs(arts=None, snap=None):
     """Every published page we know: articles (title/focus/H2), products, product categories, article categories, pages."""
     snap = snap if snap is not None else (load_snapshot() or {})
@@ -89,7 +98,7 @@ def build_docs(arts=None, snap=None):
         if p.get("status") == "publish":
             ts = tset(p.get("name", ""))
             docs.append({"kind": "product", "id": p["id"], "title": p.get("name", ""), "url": p.get("url", ""), "focus": "", "prim": ts,
-                         "sec": tset(" ".join(p.get("categories", []))) - ts, "topic": topic_set(p.get("name", "")), "modified": ""})
+                         "sec": tset(" ".join(p.get("categories", []))) - ts, "topic": topic_set(p.get("name", "")), "modified": "", "oos": not in_stock(p)})
     for tax, kind in (("product_cat", "product_cat"), ("category", "category")):
         for t in snap.get(tax, []):
             if t.get("count", 0) > 0 and t.get("name"):

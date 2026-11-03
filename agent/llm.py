@@ -141,6 +141,32 @@ def parse_json_list(text):
         raise LLMError(f"reply is not valid JSON ({e}): " + text[:120])
 
 
+def parse_json_obj(text):
+    """The model often answers with ```json fences and an object although a list was asked (or the reverse).
+    Returns a dict (a list's first dict is used). Raises LLMError with the end of the reply when it looks cut off."""
+    t = re.sub(r"```(?:json)?", "", text).strip()
+    cands = [t]
+    i, j = t.find("{"), t.rfind("}")
+    if i != -1 and j > i:
+        cands.append(t[i:j + 1])
+    i, j = t.find("["), t.rfind("]")
+    if i != -1 and j > i:
+        cands.append(t[i:j + 1])
+    err = None
+    for c in cands:
+        try:
+            v = json.loads(c)
+        except ValueError as e:
+            err = e
+            continue
+        if isinstance(v, dict):
+            return v
+        if isinstance(v, list) and v and isinstance(v[0], dict):
+            return v[0]
+    cut = " (پاسخ ناقص/نیمه‌کاره به نظر می‌رسد؛ LLM_MAX_OUTPUT_TOKENS را بالاتر ببرید)" if not t.rstrip().endswith(("}", "]")) else ""
+    raise LLMError(f"reply is not valid JSON ({err}){cut}: ...{t[-160:]}")
+
+
 def ping():
     c = cfg()
     text, info = chat([{"role": "user", "content": "Reply with the single word: OK"}], max_out=8, task="ping", use_cache=False)

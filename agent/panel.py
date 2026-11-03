@@ -6,6 +6,7 @@ import csv
 import html
 import io
 import json
+import os
 import re
 import secrets
 import threading
@@ -32,7 +33,7 @@ td,th{border-bottom:1px solid var(--line);padding:8px;vertical-align:top;font-si
 tr:nth-child(even) td{background:#fdfaf5}mark{background:#ffe08a;padding:0 2px;border-radius:3px}
 textarea{width:100%;min-height:140px;font-family:Consolas,monospace;direction:ltr;border:1px solid var(--line);border-radius:8px;padding:8px}
 .box{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin:10px 0}
-.muted{color:#7d7164;font-size:13px}a{color:#8a2a1c}.edit{font-size:12px;margin-right:6px;color:#7d7164}"""
+.muted{color:#7d7164;font-size:13px}a{color:#8a2a1c}.edit{font-size:12px;margin-right:6px;color:#7d7164}label.sa{font-weight:400;font-size:12px;white-space:nowrap}"""
 FONT_FMT = {".woff2": "woff2", ".woff": "woff", ".ttf": "truetype", ".otf": "opentype"}
 FONT_DIR = ROOT / "assets" / "fonts"
 
@@ -71,8 +72,8 @@ def edit_link(url, pid):
     return ""
 
 
-VERSION = "13"
-NAV = [("/", "خانه"), ("/health", "سلامت سایت"), ("/gsc", "Search Console"), ("/keywords", "کلمات کلیدی و تقویم"), ("/style", "لحن نوشتار"), ("/seo", "کلمه کلیدی و متا"), ("/links", "لینک‌دهی داخلی"), ("/slugs", "آدرس‌ها (slug)"), ("/inbox", "محصول و مقاله جدید"), ("/reports", "گزارش سئو"), ("/roadmap", "نقشهٔ راه")]
+VERSION = "15"
+NAV = [("/", "خانه"), ("/health", "سلامت سایت"), ("/gsc", "Search Console"), ("/keywords", "کلمات کلیدی و تقویم"), ("/graph", "گراف لینک"), ("/write", "تولید مقاله"), ("/style", "لحن نوشتار"), ("/seo", "کلمه کلیدی و متا"), ("/links", "لینک‌دهی داخلی"), ("/slugs", "آدرس‌ها (slug)"), ("/inbox", "محصول و مقاله جدید"), ("/reports", "گزارش سئو"), ("/roadmap", "نقشهٔ راه")]
 
 
 JOBS = {}
@@ -141,7 +142,7 @@ def page(title, body, head=""):
     nav = "".join(f'<a href="{u}">{n}</a>' for u, n in NAV)
     return (f'<!doctype html><html dir="rtl" lang="fa"><head><meta charset="utf-8">{head}<title>{E(title)}</title>'
             f"<style>{font_css()}{CSS}</style></head><body><nav>{nav}</nav><main>{body}</main>"
-            f"<footer class='muted' style='text-align:center;margin:30px'>نسخهٔ پنل {VERSION}</footer></body></html>")
+            f"<footer class='muted' style='text-align:center;margin:30px'>نسخهٔ پنل {VERSION}</footer>{SA_JS}</body></html>")
 
 
 def not_found(path):
@@ -160,6 +161,16 @@ def out_box(text):
 
 def btn(name, label, cls="", extra=""):
     return f'<button class="{cls}" name="do" value="{name}" {extra}>{E(label)}</button>'
+
+
+def selall(name=""):
+    """'Select all' tick for a list: inside a table it ticks every box of that table; with a name it ticks every box with that name in the form."""
+    arg = f",'{name}'" if name else ""
+    return f"<label class='sa'><input type='checkbox' onclick=\"sa(this{arg})\"> انتخاب همه</label>"
+
+
+SA_JS = ("<script>function sa(el,n){var r=n?el.form.querySelectorAll('input[name=\"'+n+'\"]'):el.closest('table').querySelectorAll('input[type=checkbox]');"
+         "r.forEach(function(c){if(c!==el&&!c.disabled)c.checked=el.checked})}</script>")
 
 
 def confirm_box(kind="site"):
@@ -203,6 +214,7 @@ def workflow():
          (f"{hrep['time'][:16].replace('T', ' ')} - {hrep['severity'].get('H', 0)} مورد جدی" if hrep else "هنوز انجام نشده"), "page", "/health", ["sync"]),
         ("gsc", "Search Console (خروجی Performance، بدون حساب سرویس)", bool(gsc_saved), (_mt(gsc_saved[-1]) if gsc_saved else "هنوز انجام نشده"), "page", "/gsc", []),
         ("keywords", "کلمات کلیدی، شکاف محتوا و تقویم (بدون AI؛ AI اختیاری)", kwa.exists(), _mt(kwa) if kwa.exists() else "هنوز انجام نشده", "page", "/keywords", ["export"]),
+        ("write", "تولید مقاله (از عنوان تا پیش‌نویس؛ AI + کنترل با کد)", None, "هر زمان", "page", "/write", ["sync"]),
         ("pack", "بستهٔ لحن (آمار نوشتار شما)", pack.exists(), I(pack), "run", "style", ["export"]),
         ("guide", "راهنمای لحن (ویرایش دستی / پیش‌نویس AI)", guide.exists(), I(guide), "page", "/style", ["pack"]),
         ("seo", "کلمه کلیدی، عنوان سئو و متا", ans.exists(), _mt(ans) + " (آخرین پیشنهاد)" if ans.exists() else "هر زمان", "page", "/seo", ["export"]),
@@ -346,9 +358,12 @@ def style_page(output=""):
             "<div class='box'><b>فرق «بسته» و «راهنما» چیست؟</b><br>"
             "<b>بستهٔ لحن</b> = داده‌های خام: آمار و نمونه‌های واقعی از مقاله‌های خودتان (بدون هوش مصنوعی ساخته می‌شود؛ بزرگ و پرنویز است).<br>"
             "<b>راهنمای لحن</b> = خلاصهٔ یک‌صفحه‌ای دستورهایی که از آن داده‌ها نتیجه می‌شود؛ نویسنده (AI) هر بار فقط همین را می‌خواند، چون فرستادن کل بسته گران است و دقت را کم می‌کند.</div>"
-            "<div class='box'>" + form("/run", '<input type="hidden" name="action" value="style">' + btn("x", "۱) ساخت/به‌روزرسانی بستهٔ لحن", "alt")).replace("<form", '<form style="display:inline"')
-            + form("/run", '<input type="hidden" name="action" value="ai_style">' + confirm_box("ai") + btn("x", "۲) پیش‌نویس راهنما با AI (جایگزین راهنمای اصلی نمی‌شود)", "alt")).replace("<form", '<form style="display:inline"')
-            + "</div>" + out_box(output))
+            "<div class='box'><b>الف) ساخت/به‌روزرسانی بستهٔ لحن</b> - با کد، <u>بدون AI و بدون هزینه</u>؛ فقط آمار و نمونه‌های مقاله‌های خودتان را از نو می‌خواند.<br>"
+            + form("/run", '<input type="hidden" name="action" value="style">' + btn("x", "ساخت/به‌روزرسانی بستهٔ لحن", "alt"))
+            + "</div><div class='box'><b>ب) پیش‌نویس راهنمای لحن با AI</b> - <u>فقط این دکمه</u> اعتبار AI مصرف می‌کند (یک تماس) و راهنمای اصلی را عوض نمی‌کند؛ فقط یک پیش‌نویس برای مقایسه می‌سازد.<br>"
+            + form("/run", '<input type="hidden" name="action" value="ai_style">' + confirm_box("ai") + "<br>" + btn("x", "ساخت پیش‌نویس راهنما با AI", "alt"))
+            + "</div><div class='box muted'>اگر راهنمای اصلی (پایین) خوب است، لازم نیست کاری بکنید: «تولید مقاله» همان را می‌خواند. بستهٔ لحن فقط ماده‌ٔ خام برای ساختن راهنماست و با AI «عوض» نمی‌شود؛ "
+            "اگر لحن راهنما را دوست ندارید، آن را همین‌جا دستی ویرایش کنید یا پیش‌نویس AI (ب) را بسازید و مقایسه کنید.</div>" + out_box(output))
     if guide.exists():
         body += ("<h2>راهنمای اصلی (همین را نویسنده می‌خواند؛ قابل ویرایش)</h2>"
                  + form("/styleguide", f"<textarea name='guide' style='direction:rtl;min-height:380px'>{E(guide.read_text(encoding='utf-8'))}</textarea><br>"
@@ -430,7 +445,7 @@ def slugs_page(output=""):
         js = ("<script>document.querySelectorAll('[data-slug]').forEach(function(i){function c(){var ok=/^[a-z0-9]+(-[a-z0-9]+)*$/.test(i.value);"
               "i.style.borderColor=ok?'#1b7a2e':'#b3261e'}i.addEventListener('input',c);c()})</script>")
         body += ("<h2>۲) بازبینی، ویرایش و ۳) اعمال</h2>" + form("/slugsreview",
-                 "<p class='muted'>slug فقط باید حروف کوچک لاتین، عدد و خط تیره باشد (کادر سبز = معتبر).</p><table><tr><th>تأیید</th><th>عنوان</th><th>slug فعلی</th><th>slug پیشنهادی (قابل ویرایش)</th></tr>"
+                 "<p class='muted'>slug فقط باید حروف کوچک لاتین، عدد و خط تیره باشد (کادر سبز = معتبر).</p><table><tr><th>" + selall() + "</th><th>عنوان</th><th>slug فعلی</th><th>slug پیشنهادی (قابل ویرایش)</th></tr>"
                  + trs + "</table>" + btn("save", "ذخیرهٔ ویرایش‌ها", "alt") + btn("preview", "پیش‌نمایش اعمال") + "<hr>" + confirm_box() + btn("apply", "اعمال تیک‌خورده‌ها در سایت", "warn")) + js)
     if terms:
         body += ("<h2>دسته و برچسب با slug فارسی (فعلاً فقط فهرست)</h2><p class='muted'>هر دسته یا برچسب یک صفحهٔ آدرس‌دار دارد (مثلاً سایت/category/<b>slug</b>/) و slug همان قسمت آخر است. "
@@ -475,10 +490,10 @@ def links_page(output=""):
         sent = E(r.get("sentence", "")).replace(E(r.get("anchor", "")), f"<mark>{E(r.get('anchor', ''))}</mark>", 1)
         trs.append(f'<tr><td><input type="checkbox" name="ok" value="{i}" {"checked" if str(i) in ok else ""}></td>'
                    f'<td>{link(r["source_url"], r["source_title"])}{edit_link(r["source_url"], r.get("source_id", ""))}</td>'
-                   f'<td>{sent}</td><td>{link(r["target_url"], r["target_title"])}</td><td>{E(r.get("score", ""))}</td>{ai_td(r)}</tr>')
+                   f'<td>{sent}</td><td>{link(r["target_url"], r["target_title"])}{('<div class=muted>' + E(r['why']) + '</div>') if r.get('why') else ''}</td><td>{E(r.get("score", ""))}</td>{ai_td(r)}</tr>')
     inner = (f'<input type="hidden" name="file" value="{E(f.name)}">'
              f"<p class='muted'>{E(f.name)} - {len(rows)} پیشنهاد. روی عنوان‌ها بزنید تا مقاله در تب جدید باز شود. فقط لینک‌های طبیعی و مرتبط را تیک بزنید.</p>"
-             "<table><tr><th>تأیید</th><th>مقالهٔ مبدأ (لینک در آن گذاشته می‌شود)</th><th>جمله (عبارت لینک‌شونده زرد است)</th>"
+             "<table><tr><th>" + selall() + "</th><th>مقالهٔ مبدأ (لینک در آن گذاشته می‌شود)</th><th>جمله (عبارت لینک‌شونده زرد است)</th>"
              "<th>مقالهٔ مقصد</th><th>امتیاز</th>" + ("<th>AI</th>" if rows and "ai_score" in rows[0] else "") + "</tr>" + "".join(trs) + "</table>"
              + btn("save", "ذخیرهٔ تیک‌ها", "alt") + btn("preview", "پیش‌نمایش اعمال")
              + "<hr>" + confirm_box() + btn("apply", "اعمال لینک‌های تیک‌خورده", "warn"))
@@ -548,7 +563,7 @@ def seo_review():
             + "</td></tr>")
     inner = ("<p class='muted'>پیشنهادها را بخوانید و هر فیلد را آزادانه ویرایش کنید؛ شمارنده‌ها زنده‌اند. فقط ردیف‌های تیک‌خورده اعمال می‌شوند. "
              "اول «ذخیره» یا «پیش‌نمایش» را بزنید تا تغییرات (قدیم ← جدید) و هشدارها را ببینید.</p>"
-             "<table><tr><th>تأیید</th><th>مقاله و مقدار فعلی</th><th>پیشنهاد (قابل ویرایش)</th></tr>" + "".join(trs) + "</table>"
+             "<table><tr><th>" + selall() + "</th><th>مقاله و مقدار فعلی</th><th>پیشنهاد (قابل ویرایش)</th></tr>" + "".join(trs) + "</table>"
              + btn("save", "ذخیرهٔ ویرایش‌ها", "alt") + btn("preview", "پیش‌نمایش اعمال")
              + "<hr>" + confirm_box() + btn("apply", "اعمال تیک‌خورده‌ها در Yoast", "warn")) + SEO_JS
     return "<h2>ب - بازبینی، ویرایش و اعمال در سایت</h2>" + form("/seoreview", inner)
@@ -626,24 +641,39 @@ def reports_page(output=""):
 
 
 # ---------- server ----------
+GONE = (ConnectionError, TimeoutError)   # the browser closed/refreshed the tab (or an antivirus cut the link) before the answer was written: not an error of ours
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
 
+    def handle(self):
+        try:
+            super().handle()
+        except GONE:
+            pass                                    # no traceback for a closed connection (WinError 10053/10054)
+
     def _send(self, code, text):
         b = text.encode("utf-8")
-        self.send_response(code)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("Content-Length", str(len(b)))
-        self.end_headers()
-        self.wfile.write(b)
+        try:
+            self.send_response(code)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(b)))
+            self.end_headers()
+            self.wfile.write(b)
+        except GONE:
+            self.close_connection = True            # the work was already done and saved; the page can simply be reloaded
 
     def _redirect(self, where):
-        self.send_response(303)
-        self.send_header("Location", where)
-        self.send_header("Content-Length", "0")
-        self.end_headers()
+        try:
+            self.send_response(303)
+            self.send_header("Location", where)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+        except GONE:
+            self.close_connection = True
 
     def _host_ok(self):
         port = self.server.server_address[1]
@@ -652,6 +682,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         try:
             self._get()
+        except GONE:
+            self.close_connection = True
         except Exception as e:
             self._send(500, page('خطا', f"<h1>خطا</h1><pre>{E(type(e).__name__ + ': ' + str(e))}</pre><p><a href='/'>بازگشت</a></p>"))
 
@@ -675,6 +707,13 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, f"zafaran-panel {VERSION}")
         if path == "/healthrun":
             return self._redirect("/health")
+        if path == "/write":
+            from . import panel_write as pw
+            q = parse_qs(urlparse(self.path).query)
+            return self._send(200, pw.job_page(q["job"][0]) if q.get("job") else pw.list_page())
+        if path == "/graph":
+            from . import panel_extra as px
+            return self._send(200, px.graph_page())
         if path == "/keywords":
             from . import panel_extra as px
             q = parse_qs(urlparse(self.path).query)
@@ -700,6 +739,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         try:
             self._post()
+        except GONE:
+            self.close_connection = True
         except Exception as e:  # never show a traceback; tell the user what happened
             self._send(500, page('خطا', f"<h1>خطا</h1><pre>{E(type(e).__name__ + ': ' + str(e))}</pre><p><a href='/'>بازگشت</a></p>"))
 
@@ -802,6 +843,18 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, px.gsc_page(f"خطا: {e}"))
             px.FLASH["gsc"] = msg
             return self._redirect("/gsc")
+        if path in ("/write", "/writeq", "/writeact", "/writeauto"):
+            from . import panel_write as pw
+            kind, val = pw.post(path, f, sure, run)
+            return self._redirect(val) if kind == "redirect" else self._send(200, val)
+        if path == "/graphbuild":
+            from . import linkgraph as lg, panel_extra as px
+            if one("do") == "links":
+                txt = run(lambda: lg.suggest(lg.load()))
+                if "ساخته شد" in txt:
+                    return self._redirect("/links")
+                return self._send(200, px.graph_page(txt))
+            return self._send(200, px.graph_page(run(lambda: lg.build(print))))
         if path == "/kwbuild":
             from . import keywords as kw, panel_extra as px
             try:
@@ -922,12 +975,47 @@ class Handler(BaseHTTPRequestHandler):
         self._send(404, not_found(path))
 
 
+class Server(HTTPServer):
+    def handle_error(self, request, client_address):
+        import sys
+        if isinstance(sys.exc_info()[1], GONE):     # a closed browser connection is not worth a traceback in the black window
+            return
+        super().handle_error(request, client_address)
+
+
 def make_server(port=0):
-    return HTTPServer(("127.0.0.1", port), Handler)
+    return Server(("127.0.0.1", port), Handler)
 
 
 LOCK_PORT = 29417                  # odd, unregistered, below the OS "ephemeral" ranges; held by the running copy only
 PANEL_PORTS = range(2000, 2011)   # the panel's address: http://127.0.0.1:2000/ (next free one if 2000 is taken); loopback only
+
+
+def configured_port():
+    """PANEL_PORT from .env (e.g. PANEL_PORT=2000) -> int, or None when it is not set. Invalid values stop with a clear message."""
+    from dotenv import load_dotenv
+    load_dotenv(ROOT / ".env")
+    v = os.environ.get("PANEL_PORT", "").strip()
+    if not v:
+        return None
+    if not v.isdigit() or not 1024 <= int(v) <= 65535 or int(v) == LOCK_PORT:
+        raise SystemExit(f"PANEL_PORT in .env must be a number between 1024 and 65535 (and not {LOCK_PORT}); got '{v}'.")
+    return int(v)
+
+
+def _ports():
+    """The port from .env alone (predictable address), else the default range starting at 2000."""
+    p = configured_port()
+    return [p] if p else list(PANEL_PORTS)
+
+
+def _open_server(ports):
+    for port in ports:
+        try:
+            return make_server(port), port
+        except OSError:
+            continue
+    return None, None
 
 
 def _acquire_lock():
@@ -947,7 +1035,7 @@ def _acquire_lock():
 def _running_panel():
     """-> (port, version) of an already running panel, or None."""
     import urllib.request
-    for port in PANEL_PORTS:
+    for port in _ports():
         try:
             with urllib.request.urlopen(f"http://127.0.0.1:{port}/ping", timeout=1.5) as r:
                 t = r.read().decode("utf-8", "replace").strip()
@@ -991,15 +1079,11 @@ def serve():
             webbrowser.open(url)
             return
         print(f"Warning: port {LOCK_PORT} is used by another program, so the one-copy check is off.")
-    srv = None
-    for port in PANEL_PORTS:
-        try:
-            srv = make_server(port)
-            break
-        except OSError:
-            continue
+    srv, port = _open_server(_ports())
     if srv is None:
-        print(f"No free port in {PANEL_PORTS.start}-{PANEL_PORTS.stop - 1}.")
+        ps = _ports()
+        print(f"Port {ps[0]} (PANEL_PORT in .env) is used by another program. Change PANEL_PORT in .env or close that program." if configured_port()
+              else f"No free port in {PANEL_PORTS.start}-{PANEL_PORTS.stop - 1}. You can set PANEL_PORT in .env.")
         return
     pf = ROOT / "logs" / "panel.port"
     pf.parent.mkdir(exist_ok=True)

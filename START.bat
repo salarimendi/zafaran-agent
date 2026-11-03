@@ -69,6 +69,8 @@ echo  24  Site health check: technical + WooCommerce, read-only (best in the pan
 echo  25  Keywords: bank, target map, cannibalization, content gaps (read-only, no AI; best in the panel)
 echo  26  Content calendar of fixed occasions (Nowruz, Yalda, Ramadan, harvest ...)
 echo  27  AI: suggest topics for the content gaps (ONE call; run 25 first)
+echo  28  Link graph + topic clusters: orphans, pillar/supporting articles, product links (read-only, no AI; best in the panel)
+echo  29  Build link suggestions from the graph (then review in the panel / menu 11)
 echo.
 echo   0  Exit
 echo.
@@ -101,6 +103,8 @@ if "%c%"=="24" python -m agent.cli health
 if "%c%"=="25" python -m agent.cli keywords
 if "%c%"=="26" python -m agent.cli calendar
 if "%c%"=="27" python -m agent.cli aigap --go
+if "%c%"=="28" python -m agent.cli graph
+if "%c%"=="29" python -m agent.cli graphlinks
 if "%c%"=="0" exit /b 0
 echo.
 pause

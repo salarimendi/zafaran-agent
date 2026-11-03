@@ -133,9 +133,9 @@ def _items(g, data, ai):
             mid = (f"{P.link(it['url'], it['title'])}{P.edit_link(it['url'], it['id'])}</td><td>" + "".join(cells)
                    + (f"<div style='color:#a65f00'>⚠ {E(it['notes'])}</div>" if it.get("notes") else ""))
         rows.append(f"<tr><td>{chk}</td><td>{mid}</td></tr>")
-    hdr = {"links": "<th></th><th>لینک ← آدرس نهایی</th><th>در کدام صفحه‌ها</th>", "broken": "<th></th><th>لینک شکسته</th><th>در کدام صفحه‌ها</th><th>چه شود؟</th>",
-           "alt": "<th></th><th>صفحه</th><th>متن Alt</th>", "mixed": "<th></th><th>صفحه</th><th></th>", "noindex": "<th></th><th>صفحه</th><th>تشخیص</th>",
-           "seo": "<th></th><th>صفحه</th><th>پیشنهاد (قابل ویرایش)</th>", "short": "<th></th><th>محصول</th><th>پیشنهاد (قابل ویرایش)</th>"}[g]
+    hdr = {"links": "<th>" + P.selall() + "</th><th>لینک ← آدرس نهایی</th><th>در کدام صفحه‌ها</th>", "broken": "<th>" + P.selall() + "</th><th>لینک شکسته</th><th>در کدام صفحه‌ها</th><th>چه شود؟</th>",
+           "alt": "<th>" + P.selall() + "</th><th>صفحه</th><th>متن Alt</th>", "mixed": "<th>" + P.selall() + "</th><th>صفحه</th><th></th>", "noindex": "<th>" + P.selall() + "</th><th>صفحه</th><th>تشخیص</th>",
+           "seo": "<th>" + P.selall() + "</th><th>صفحه</th><th>پیشنهاد (قابل ویرایش)</th>", "short": "<th>" + P.selall() + "</th><th>محصول</th><th>پیشنهاد (قابل ویرایش)</th>"}[g]
     built = E(data["built"][:16].replace("T", " "))
     return (f"<h2>{len(items)} مورد <span class='muted'>(ساخته‌شده {built})</span></h2>"
             + form("/hfapply", f'<input type="hidden" name="g" value="{g}"><table><tr>{hdr}</tr>' + "".join(rows) + "</table>"
@@ -302,6 +302,9 @@ def _kw_gaps(P, res, E, form, btn, link):
         t += _tbl("", ["موضوع (پرنمایش‌ترین عبارت)", "نمایش", "کلیک", "رتبه", "نیت", "پیشنهاد", "عبارت‌های دیگر"],
                           [[E(c["label"]), c["impr"], c["clicks"], c["pos"], kw.INTENT_FA[c["intent"]], E(c["suggest"]),
                             "<span class='muted'>" + E("؛ ".join(q["key"] for q in c["queries"][1:5])) + (f" (+{c['n'] - 5})" if c["n"] > 5 else "") + "</span>"] for c in cl[:40]])
+        from . import panel_write as pw
+        t += "<details class='box'><summary><b>ارسال خوشه‌های شکاف به «تولید مقاله»</b> (تیک بزنید؛ عنوان را بعداً ویرایش می‌کنید)</summary>" + pw.idea_form(
+            P, [(c["label"], f"نمایش {c['impr']}؛ عبارت‌های مرتبط: " + "، ".join(q["key"] for q in c["queries"][:4])) for c in cl[:40]], "gap") + "</details>"
         t += ("<div class='box'><b>خوشه‌بندی معنایی و پیشنهاد موضوع با AI</b> (یک تماس دسته‌ای؛ فقط ایده، چیزی روی سایت تغییر نمی‌کند):<br>"
               + _inline(form("/run", '<input type="hidden" name="action" value="ai_gap_est">' + btn("x", "برآورد هزینه", "alt")))
               + _inline(form("/run", '<input type="hidden" name="action" value="ai_gap">' + P.confirm_box("ai") + btn("x", "پیشنهاد موضوع با AI")))
@@ -317,7 +320,9 @@ def _kw_gaps(P, res, E, form, btn, link):
             t += _tbl(f"پیشنهاد AI ({E(d['built'][:16].replace('T', ' '))}، هزینه ${d.get('cost', 0)})", ["نوع", "عنوان پیشنهادی", "کلمه کلیدی", "نمایش", "از عبارت‌های", "هشدار"],
                       [[TY.get(i["type"], E(str(i["type"]))), E(i["t"]), E(i["k"]), i["impr"], "<span class='muted'>" + E("؛ ".join(i["queries"][:3])) + "</span>",
                         f"<span style='color:#a65f00'>{E(i['notes'])}</span>" if i["notes"] else "✓"] for i in d["items"]],
-                      "این‌ها فقط ایده‌اند. برای نوشتن، مرحلهٔ ۴ نقشهٔ راه (موتور تولید مقاله) در راه است؛ فعلاً می‌توانید از همین‌ها بریف بسازید.")
+                      "این‌ها فقط ایده‌اند. با تیک‌زدن و ارسال به «تولید مقاله»، AI طبق لحن شما بریف و متن می‌نویسد و پیش‌نویس در وردپرس ساخته می‌شود.")
+            from . import panel_write as pw
+            t += pw.idea_form(P, [(i["t"], f"کلمه کلیدی پیشنهادی: {i['k']}") for i in d["items"] if i["type"] == "article"], "ai_topic")
     if res["cats_without_article"]:
         t += _tbl("دستهٔ محصولی که هیچ مقالهٔ پشتیبانی ندارد", ["دسته", "تعداد محصول"],
                   [[link(x["url"], x["name"]) if x["url"] else E(x["name"]), x["count"]] for x in res["cats_without_article"][:30]],
@@ -405,4 +410,55 @@ def _kw_calendar(P, arts, E, link):
         trs.append([f"<b>{E(r['name'])}</b>", f"{E(r['jalali'])}{' (تقریبی)' if r['approx'] else ''}<br><span class='muted'>{r['date']}</span>", r["days"],
                     f"{E(r['publish_jalali'])}<br><span class='muted'>{r['publish_by']}</span>", f"<b style='color:{col}'>{lab}</b>", cov,
                     "<br>".join("· " + E(x) for x in r["topics"][:3])])
-    return t + _tbl("", ["مناسبت", "تاریخ", "روز مانده", "انتشار تا", "وضعیت", "پوشش فعلی", "ایدهٔ موضوع"], trs)
+    from . import panel_write as pw
+    ideas = [(x, f"مناسبت: {r['name']} ({r['jalali']})") for r in rows for x in r["topics"]]
+    return (t + _tbl("", ["مناسبت", "تاریخ", "روز مانده", "انتشار تا", "وضعیت", "پوشش فعلی", "ایدهٔ موضوع"], trs)
+            + "<details class='box'><summary><b>ارسال ایده‌های مناسبتی به «تولید مقاله»</b></summary>" + pw.idea_form(P, ideas, "calendar") + "</details>")
+
+
+# ------------------------------------------------------------------ stage 5: link graph and clusters (/graph)
+def graph_page(output=""):
+    P = _P()
+    from . import linkgraph as lg
+    E, form, btn, link, edit = P.E, P.form, P.btn, P.link, P.edit_link
+    res = lg.load()
+    body = ("<h1>گراف لینک و خوشه‌ها</h1><p class='muted'>فقط می‌خواند و بدون AI و بدون هزینه است. از متن مقاله‌ها و آخرین همگام‌سازی، نقشهٔ لینک‌های داخلی، مقاله‌های یتیم، خوشه‌های موضوعی "
+            "(صفحهٔ مادر و مقاله‌های پشتیبان) و لینک مقاله ↔ دسته/محصول ساخته می‌شود. محدودیت: فقط متن مقاله‌ها خوانده می‌شود (لینک‌های خود صفحهٔ محصول/دسته دیده نمی‌شود) و خوشه‌ها از روی عنوان، کلمه کلیدی و تیترها حدس زده می‌شوند، نه آمار جست‌وجو.</p>"
+            + form("/graphbuild", btn("build", "ساخت/به‌روزرسانی گراف (فقط می‌خواند)")))
+    if output:
+        body += P.out_box(output)
+    if not res:
+        return P.page("گراف لینک", body + "<div class='box'>اول «همگام‌سازی سایت» و «خروجی مقاله‌ها» (صفحهٔ خانه) و بعد «ساخت گراف».</div>")
+    c = res["counts"]
+    body += (f"<div class='box'>ساخت: {E(res['built'][:16].replace('T', ' '))} · مقاله {c['article']}، محصول {c['product']}، دستهٔ محصول {c['product_cat']}، صفحه {c['page']} · "
+             f"<b>{res['edges']}</b> لینک داخلی · <b>{len(res['clusters'])}</b> خوشه · <b style='color:#b3261e'>{len(res['orphans'])}</b> مقالهٔ یتیم · {len(res['dead_ends'])} مقاله بدون لینک خروجی · "
+             f"نوع لینک‌ها: {E('، '.join(f'{k} ({v})' for k, v in sorted(res['by_type'].items())))}</div>")
+    if not res.get("has_stock"):
+        body += "<div class='box' style='border-color:#a65f00'>⚠ موجودی محصولات ذخیره نشده؛ «همگام‌سازی سایت» را دوباره بزنید. تا آن موقع به هیچ محصولی لینک پیشنهاد نمی‌شود.</div>"
+    body += ("<div class='box'><b>ساخت پیشنهاد لینک از گراف</b> (هم‌خوان با خوشه‌ها؛ فقط جایی که عبارت طبیعی در متن هست؛ هرگز محصول ناموجود؛ با تیک و پشتیبان در «لینک‌دهی داخلی» اعمال می‌شود)"
+             + form("/graphbuild", btn("links", "ساخت پیشنهادها", "alt")) + "</div>")
+    if res["oos_linked"]:
+        rows = "".join(f"<tr><td>{link(x['url'], x['title'])}</td><td>{E('، '.join(x['from']))}</td></tr>" for x in res["oos_linked"])
+        body += f"<h2 style='color:#b3261e'>لینک به محصول ناموجود</h2><p class='muted'>این لینک‌ها را از متن مقاله بردارید.</p><table><tr><th>محصول ناموجود</th><th>لینک‌شده از</th></tr>{rows}</table>"
+    row = lambda x: f"<tr><td>{link(x['url'], x['title'])}{edit(x['url'], x['id'])}</td><td>{x['inb']}</td><td>{x['out']}</td></tr>"
+    tbl = lambda items: "<table><tr><th>صفحه</th><th>ورودی</th><th>خروجی</th></tr>" + "".join(row(x) for x in items[:60]) + "</table>"
+    body += f"<h2>مقاله‌های یتیم ({len(res['orphans'])})</h2>" + (tbl(res["orphans"]) if res["orphans"] else "<p>✓ همه حداقل یک لینک ورودی دارند.</p>")
+    body += f"<h2>خوشه‌های موضوعی ({len(res['clusters'])})</h2>"
+    for cl in res["clusters"]:
+        p = cl["pillar"]
+        sup = "".join(f"<tr><td>{link(s['url'], s['title'])}{edit(s['url'], s['id'])}</td><td>{s['sim']}</td><td>{'✓' if s['to_pillar'] else '<b style=color:#b3261e>✗</b>'}</td>"
+                      f"<td>{'✓' if s['from_pillar'] else '<b style=color:#a65f00>✗</b>'}</td></tr>" for s in cl["supporters"])
+        extra = ""
+        if cl["cat"]:
+            extra += f"<div class='muted'>دستهٔ محصول مرتبط: {link(cl['cat']['url'], cl['cat']['title'])} — لینک از {cl['cat']['linked_by']} مقالهٔ خوشه</div>"
+        for x in cl["products"]:
+            extra += f"<div class='muted'>محصول مرتبط (موجود): {link(x['url'], x['title'])} — لینک از {x['linked_by']} مقاله</div>"
+        body += (f"<div class='box'><b>صفحهٔ مادر: {link(p['url'], p['title'])}</b>{edit(p['url'], p['id'])} <span class='muted'>(لینک ورودی {p['inb']})</span>"
+                 f"<table><tr><th>مقالهٔ پشتیبان</th><th>شباهت</th><th>به مادر لینک دارد</th><th>مادر به آن لینک دارد</th></tr>{sup}</table>{extra}</div>")
+    if res["single"]:
+        body += f"<details class='box'><summary>مقاله‌های بدون خوشه ({len(res['single'])}؛ موضوع مستقل یا هنوز کم‌همتا)</summary>{tbl(res['single'])}</details>"
+    body += (f"<details class='box'><summary>بدون لینک خروجی ({len(res['dead_ends'])})</summary>{tbl(res['dead_ends'])}</details>"
+             f"<details class='box'><summary>دسته‌های محصول بدون لینک از مقاله ({len(res['cats_unlinked'])})</summary>{tbl(res['cats_unlinked'])}</details>"
+             f"<details class='box'><summary>محصولات موجود بدون لینک از مقاله ({len(res['products_unlinked'])})</summary>{tbl(res['products_unlinked'])}</details>"
+             "<p class='muted'>گزارش کامل: reports\\link_graph.md و link_graph_nodes.csv</p>")
+    return P.page("گراف لینک", body)

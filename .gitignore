@@ -37,6 +37,7 @@ inbox/products/*
 !inbox/products/_sample/
 inbox/articles/*
 !inbox/articles/_sample.md
+inbox/images/
 inbox/searchconsole/*
 !inbox/searchconsole/.keep
 result.json
