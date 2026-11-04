@@ -230,7 +230,7 @@ def main():
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     ap = argparse.ArgumentParser(prog="agent")
-    ap.add_argument("cmd", choices=["check", "diagnose", "products", "articles", "sync", "newterms", "export", "audit", "style", "linkplan", "applylinks", "seotodo", "applyseo", "panel", "routine", "aitest", "aiseo", "aijudge", "aistyle", "aislugs", "applyslugs", "health", "keywords", "calendar", "aigap", "graph", "graphlinks"])
+    ap.add_argument("cmd", choices=["check", "diagnose", "products", "articles", "sync", "newterms", "export", "audit", "style", "linkplan", "applylinks", "seotodo", "applyseo", "panel", "routine", "aitest", "aiseo", "aijudge", "aistyle", "aislugs", "applyslugs", "health", "keywords", "calendar", "aigap", "graph", "graphlinks", "media", "mediaalt", "cats", "schemacheck", "tasks", "decay", "impact", "handoff"])
     ap.add_argument("path", nargs="?", help="optional: one product folder / one article file")
     ap.add_argument("--go", action="store_true", help="really send to the site (as DRAFT). Without it: dry run.")
     ap.add_argument("--limit", type=int, default=None, help="ai commands: only the first N items (cheap trial)")
@@ -272,6 +272,44 @@ def main():
             keywords.build(a.min, print)
             print("\nفایل‌ها: reports\\keywords_bank.csv ، content_gaps.csv ، keywords_cannibal.csv  (مرور کامل‌تر: پنل ← کلمات کلیدی و تقویم)")
         except ValueError as e:
+            print(e)
+    elif a.cmd in ("tasks", "decay", "impact", "handoff"):
+        try:
+            if a.cmd == "tasks":
+                from . import tasks
+                for i, t in enumerate(tasks.queue()[:25], 1):
+                    print(f"{i:>2}. [{t['score']}] {t['title']}\n      {t['why']}  → پنل {t['path']}")
+            elif a.cmd == "decay":
+                from . import tracker
+                r = tracker.decay()
+                print(r["note"] or "")
+                for x in r["items"][:25]:
+                    print(f"- {x['title']} [id {x['id']}]: {'؛ '.join(x['reasons'])}")
+                print("برای ویرایش: پنل ← «به‌روزرسانی و پایش اثر».")
+            elif a.cmd == "impact":
+                from . import tracker
+                for r in tracker.impact()[:40]:
+                    print(f"{r['time'][:10]}  {r['label']:<18} {r['title'][:40]:<40} {tracker.VERDICT[r['verdict']]}")
+            else:
+                from . import tasks
+                p, _ = tasks.bundle()
+                print(f"بسته ساخته شد: {p}\nهمین فایل را همراه پروژه به Claude بدهید (کلید و رمز حذف شده).")
+        except Exception as e:
+            print(e)
+    elif a.cmd in ("media", "mediaalt", "cats", "schemacheck"):
+        from . import media_seo as ms
+        try:
+            if a.cmd == "media":
+                ms.audit_media(print)
+            elif a.cmd == "mediaalt":
+                ms.build_alt(None, print)
+                print("برای اعمال: پنل ← «تصاویر و دسته‌ها» (تیک، پیش‌نمایش و پشتیبان).")
+            elif a.cmd == "cats":
+                ms.audit_cats(print)
+                print("نوشتن توضیح با AI و اعمال: پنل ← «تصاویر و دسته‌ها».")
+            else:
+                ms.validate_schema(12, None, print)
+        except Exception as e:
             print(e)
     elif a.cmd in ("graph", "graphlinks"):
         from . import linkgraph

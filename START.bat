@@ -71,6 +71,14 @@ echo  26  Content calendar of fixed occasions (Nowruz, Yalda, Ramadan, harvest .
 echo  27  AI: suggest topics for the content gaps (ONE call; run 25 first)
 echo  28  Link graph + topic clusters: orphans, pillar/supporting articles, product links (read-only, no AI; best in the panel)
 echo  29  Build link suggestions from the graph (then review in the panel / menu 11)
+echo  30  Image audit (media library: size/format/Alt/names; read-only)
+echo  31  Build Alt suggestions from article context (apply in the panel)
+echo  32  Product-category audit (descriptions)
+echo  33  Schema check (JSON-LD of a sample of pages; read-only)
+echo  34  Task queue (prioritized: what to do next)
+echo  35  Articles that lost clicks / are stale (open them for AI editing in the panel)
+echo  36  Impact: did my changes help? (Search Console before/after)
+echo  37  Build the hand-off file with errors/suggestions for the developer
 echo.
 echo   0  Exit
 echo.
@@ -105,6 +113,14 @@ if "%c%"=="26" python -m agent.cli calendar
 if "%c%"=="27" python -m agent.cli aigap --go
 if "%c%"=="28" python -m agent.cli graph
 if "%c%"=="29" python -m agent.cli graphlinks
+if "%c%"=="30" python -m agent.cli media
+if "%c%"=="31" python -m agent.cli mediaalt
+if "%c%"=="32" python -m agent.cli cats
+if "%c%"=="33" python -m agent.cli schemacheck
+if "%c%"=="34" python -m agent.cli tasks
+if "%c%"=="35" python -m agent.cli decay
+if "%c%"=="36" python -m agent.cli impact
+if "%c%"=="37" python -m agent.cli handoff
 if "%c%"=="0" exit /b 0
 echo.
 pause

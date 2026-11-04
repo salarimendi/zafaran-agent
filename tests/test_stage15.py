@@ -39,7 +39,7 @@ class WP2(FakeWP):
             if "status" in j:
                 post["status"] = j["status"]
             post["mod"] = f"2026-11-03T10:0{len(post['updates'])}:00"
-        return Resp({"id": post["id"], "status": post["status"], "link": post["link"], "content": {"raw": post["content"]}, "title": {"raw": post.get("title", "")},
+        return Resp({"id": post["id"], "slug": post.get("slug", ""), "status": post["status"], "link": post["link"], "content": {"raw": post["content"]}, "title": {"raw": post.get("title", "")},
                      "excerpt": {"raw": post.get("excerpt", "")}, "modified_gmt": post.get("mod", "2026-11-03T09:00:00"), "meta": post.get("meta", {})})
 
 
@@ -676,3 +676,65 @@ class Fixes18(Fx):
         q = ag.qc(j)
         self.assertTrue([x for s, x in q if s == "H" and "ناموجود" in x])
         self.assertTrue(any("ناموجود" in x for x in ag.send_problems(j, "publish")))
+
+
+class ReviewFindings(Fx):
+    def test_medical_words_are_whole_words_and_can_be_passed_or_deleted(self):
+        t = "آب شفاف و تضمین کیفیت. این زعفران شفا می‌دهد. خرید آسان است."
+        self.assertEqual([f["word"] for f in ag.med_findings(t)], ["تضمین", "شفا"])      # «شفاف» is not «شفا»
+        j = self.with_h3()
+        j["text"] += "\n\nما تضمین کیفیت می‌دهیم. نگهداری آسان است. این زعفران شفا می‌دهد."
+        j["links"] = []
+        self.assertTrue([x for s, x in ag.qc(j) if s == "H" and "ادعای پزشکی" in x])
+        self.assertTrue(ag.send_problems(j, "publish"))
+        f = ag.med_findings(j["text"])
+        self.assertIn("تضمین کیفیت می‌دهیم", f[0]["ctx"])
+        n = ag.remove_sentences(j, [i for i, x in enumerate(f) if x["word"] == "شفا"])    # delete that sentence only
+        self.assertEqual(n, 1)
+        self.assertNotIn("شفا می‌دهد", j["text"])
+        self.assertIn("نگهداری آسان است.", j["text"])
+        self.assertTrue([x for s, x in ag.qc(j) if s == "H" and "ادعای پزشکی" in x])    # «تضمین» still flagged
+        j["qc_ok"] = ["تضمین"]                                                           # the user says: not a problem
+        self.assertFalse([x for s, x in ag.qc(j) if s == "H" and "ادعای پزشکی" in x])
+        self.assertFalse([x for x in ag.send_problems(j, "publish") if "پزشکی" in x])
+        ag.undo_last(j)
+        self.assertIn("شفا می‌دهد", j["text"])
+
+    def test_existing_links_listed_and_removable(self):
+        j = self.with_h3()
+        j["links"] = []
+        j["text"] += (f"\n\nببینید [زعفران نگین](https://zafaranmarket.com/a4/) و [بیرونی](https://example.org/x) و [دوباره](https://zafaranmarket.com/a4/).")
+        L = ag.existing_links(j)
+        self.assertEqual([x["anchor"] for x in L], ["زعفران نگین", "بیرونی", "دوباره"])
+        self.assertEqual(L[1]["flags"], ["external"])
+        self.assertEqual(L[2]["flags"], ["dup"])
+        self.assertEqual(L[0]["kind"], "article")
+        n = ag.remove_links(j, {1, 2})
+        self.assertEqual(n, 2)
+        self.assertIn("بیرونی و دوباره.", j["text"])                    # anchor text stays
+        self.assertNotIn("example.org", j["text"])
+        self.assertEqual([x["anchor"] for x in ag.existing_links(j)], ["زعفران نگین"])
+        ag.undo_last(j)
+        self.assertEqual(len(ag.existing_links(j)), 3)
+
+
+class PanelReview(PanelRevise):
+    def test_boxes_and_actions(self):
+        j = self.with_h3()
+        j["text"] += "\n\nما تضمین کیفیت می‌دهیم. [بیرونی](https://example.org/x) هم هست."
+        j["links"] = []
+        ag.save(j)
+        h = self.get("/write?job=" + j["id"])
+        self.assertIn("یافته‌های کنترل کیفیت", h)
+        self.assertIn("لینک‌های موجود در متن (1)", h)
+        _, h = self.post("/writeact", job=j["id"], do="qc_apply", qd=["تضمین"])
+        self.assertEqual(ag.load(j["id"])["qc_ok"], ["تضمین"])
+        _, h = self.post("/writeact", job=j["id"], do="links_remove", rm=["0"])
+        self.assertIn("1 لینک از متن برداشته شد", h)
+        self.assertNotIn("example.org", ag.load(j["id"])["text"])
+        _, h = self.post("/writeact", job=j["id"], do="qc_reset")
+        self.assertEqual(ag.load(j["id"])["qc_ok"], [])
+        f = ag.med_findings(ag.load(j["id"])["text"])
+        _, h = self.post("/writeact", job=j["id"], do="qc_apply", qx=[str(i) for i, x in enumerate(f) if x["word"] == "تضمین"])
+        self.assertIn("1 جمله حذف شد", h)
+        self.assertNotIn("تضمین کیفیت", ag.load(j["id"])["text"])

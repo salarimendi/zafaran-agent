@@ -73,7 +73,7 @@ def edit_link(url, pid):
 
 
 VERSION = "15"
-NAV = [("/", "خانه"), ("/health", "سلامت سایت"), ("/gsc", "Search Console"), ("/keywords", "کلمات کلیدی و تقویم"), ("/graph", "گراف لینک"), ("/write", "تولید مقاله"), ("/style", "لحن نوشتار"), ("/seo", "کلمه کلیدی و متا"), ("/links", "لینک‌دهی داخلی"), ("/slugs", "آدرس‌ها (slug)"), ("/inbox", "محصول و مقاله جدید"), ("/reports", "گزارش سئو"), ("/roadmap", "نقشهٔ راه")]
+NAV = [("/", "خانه"), ("/tasks", "صف کار و گزارش خطا"), ("/refresh", "به‌روزرسانی و پایش اثر"), ("/health", "سلامت سایت"), ("/gsc", "Search Console"), ("/keywords", "کلمات کلیدی و تقویم"), ("/graph", "گراف لینک"), ("/media", "تصاویر و دسته‌ها"), ("/write", "تولید مقاله"), ("/style", "لحن نوشتار"), ("/seo", "کلمه کلیدی و متا"), ("/links", "لینک‌دهی داخلی"), ("/slugs", "آدرس‌ها (slug)"), ("/inbox", "محصول و مقاله جدید"), ("/reports", "گزارش سئو"), ("/roadmap", "نقشهٔ راه")]
 
 
 JOBS = {}
@@ -112,7 +112,14 @@ def run(fn, yes=False):
                 print(f"ERROR: {type(e).__name__}: {e}")
     finally:
         builtins.input = real
-    return buf.getvalue()
+    out = buf.getvalue()
+    if "ERROR:" in out:                              # kept for the hand-off bundle (panel -> صف کار و گزارش خطا)
+        try:
+            from . import tasks
+            tasks.log_error("panel", out)
+        except Exception:
+            pass
+    return out
 
 
 def actions():
@@ -711,9 +718,18 @@ class Handler(BaseHTTPRequestHandler):
             from . import panel_write as pw
             q = parse_qs(urlparse(self.path).query)
             return self._send(200, pw.job_page(q["job"][0]) if q.get("job") else pw.list_page())
+        if path == "/tasks":
+            from . import panel_extra as px
+            return self._send(200, px.tasks_page())
+        if path == "/refresh":
+            from . import panel_extra as px
+            return self._send(200, px.refresh_page())
         if path == "/graph":
             from . import panel_extra as px
             return self._send(200, px.graph_page())
+        if path == "/media":
+            from . import panel_extra as px
+            return self._send(200, px.media_page())
         if path == "/keywords":
             from . import panel_extra as px
             q = parse_qs(urlparse(self.path).query)
@@ -847,6 +863,63 @@ class Handler(BaseHTTPRequestHandler):
             from . import panel_write as pw
             kind, val = pw.post(path, f, sure, run)
             return self._redirect(val) if kind == "redirect" else self._send(200, val)
+        if path == "/tasksact":
+            from . import panel_extra as px, tasks as tk
+            do, key, msg = one("do"), one("key"), ""
+            try:
+                if do in ("done", "dismissed"):
+                    tk.set_status(key, do)
+                elif do == "snoozed":
+                    tk.set_status(key, "snoozed", 7)
+                elif do == "reset":
+                    tk.set_status(key, "reset")
+                elif do == "note_add":
+                    tk.add_note(one("kind"), one("title"), one("note"), one("prio") or "normal")
+                    msg = "ثبت شد."
+                elif do == "note_done":
+                    tk.finish_note(key, (one("v") or "1") == "1")
+                elif do == "note_del":
+                    tk.remove_note(key)
+                elif do == "bundle":
+                    p_, text = tk.bundle()
+                    return self._send(200, px.tasks_page(f"بسته ساخته شد: {p_}", bundle=text))
+            except ValueError as e:
+                msg = str(e)
+            return self._send(200, px.tasks_page(msg))
+        if path == "/refreshact":
+            from . import articlegen as ag_, panel_extra as px
+            do = one("do")
+            if do in ("import_prev", "import_go"):
+                pid = one("id")
+                holder = {}
+                txt = run(lambda: holder.update(job=ag_.import_existing(int(pid), do == "import_go", one("okfid") == "1", one("why"))) if pid.isdigit() else print("ERROR: شناسه نامعتبر"), yes=True)
+                if holder.get("job"):
+                    return self._redirect("/write?job=" + holder["job"]["id"])
+                return self._send(200, px.refresh_page(txt))
+            return self._send(200, px.refresh_page())
+        if path == "/mediaact":
+            from . import media_seo as ms, panel_extra as px
+            do = one("do")
+            ids = lambda name: set(f.get(name, []))
+            if do in ("alt_go", "cats_go", "cats_ai") and not sure:
+                return self._send(200, px.media_page("اجرا نشد: تیک تأیید را بزنید."))
+            if do == "audit_media":
+                txt = run(lambda: ms.audit_media(print))
+            elif do == "alt_build":
+                txt = run(lambda: ms.build_alt(None, print))
+            elif do in ("alt_prev", "alt_go"):
+                txt = run(lambda: ms.apply_alt(ids("alt"), {k[4:]: v[0] for k, v in f.items() if k.startswith("alt_") and v}, do == "alt_go", print))
+            elif do == "cats_audit":
+                txt = run(lambda: ms.audit_cats(print))
+            elif do in ("cats_est", "cats_ai"):
+                txt = run(lambda: ms.draft_cats(do == "cats_ai", print), yes=(do == "cats_ai"))
+            elif do in ("cats_prev", "cats_go"):
+                txt = run(lambda: ms.apply_cats(ids("cat"), {k[4:]: v[0] for k, v in f.items() if k.startswith("cat_") and v}, do == "cats_go", print))
+            elif do == "schema_run":
+                txt = run(lambda: ms.validate_schema(12, None, print))
+            else:
+                txt = "دستور نامعتبر."
+            return self._send(200, px.media_page(txt))
         if path == "/graphbuild":
             from . import linkgraph as lg, panel_extra as px
             if one("do") == "links":

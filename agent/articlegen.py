@@ -32,6 +32,41 @@ BATCH_SECTIONS, WORDS_PER_SECTION = 2, 150
 MEDICAL = ["درمان", "شفا", "معالجه", "سرطان", "دیابت", "افسردگی", "داروی", "تضمین", "قطعاً", "قطعا", "بیماری", "ضدسرطان", "لاغری", "کاهش وزن", "بدون عوارض", "معجزه"]
 
 
+_SUF = r"(?:ها|های|ی|ای|ات|ان|م|ت|ش|مان|تان|شان|ً)?"
+_LET = "\u0600-\u06FF\u200c"
+
+
+def med_findings(t):
+    """Every place where a sensitive word is used as a whole word (with a normal suffix): «شفاف» is not «شفا». -> [{word, start, end, ctx}]"""
+    out = []
+    for w in MEDICAL:
+        rx = re.compile(r"(?<![" + _LET + "])" + re.escape(w).replace("\\ ", r"[\s\u200c]+") + _SUF + r"(?![" + _LET + "])")
+        for m in rx.finditer(t):
+            a = max(t.rfind(c, 0, m.start()) for c in ".!؟?\n") + 1
+            cands = [i for i in (t.find(c, m.end()) for c in ".!؟?\n") if i != -1]
+            b = (min(cands) + 1) if cands else len(t)
+            out.append({"word": w, "start": m.start(), "end": m.end(), "s0": a, "s1": b, "ctx": " ".join(t[a:b].split())[:240]})
+    out.sort(key=lambda f: f["start"])
+    return out
+
+
+def remove_sentences(job, idxs):
+    """Delete the whole sentence of the chosen findings (indexes into med_findings(text)). -> number removed"""
+    t = job["text"]
+    f = med_findings(t)
+    spans = sorted({(f[i]["s0"], f[i]["s1"]) for i in idxs if 0 <= i < len(f)}, reverse=True)
+    for a, b in spans:
+        t = t[:a] + t[b:]
+    t = re.sub(r"(?m)^[ \t]+", "", t)
+    t = re.sub(r"\n{3,}", "\n\n", t).strip()
+    if spans:
+        snapshot(job, "حذف جملهٔ مشکوک")
+        job["text"] = t
+        mark_dirty(job)
+        save(job)
+    return len(spans)
+
+
 def get_client():
     c = WPClient(load_config())
     c.detect_mode()
@@ -560,9 +595,10 @@ def qc(job):
         if not p.lstrip().startswith(("#", "-", "|", ">", "[[", "*")) and len(p.split()) > 130:
             L.append(("L", "پاراگراف بلند (بیش از ۱۳۰ کلمه)؛ بهتر است شکسته شود: " + p[:40] + "..."))
             break
-    med = sorted({w for w in MEDICAL if w in t})
+    ok_words = set(job.get("qc_ok") or [])
+    med = sorted({f["word"] for f in med_findings(t)} - ok_words)
     if med:
-        L.append(("H", "احتمال ادعای پزشکی/اغراق‌آمیز؛ حتماً بخوانید و اصلاح کنید: " + "، ".join(med)))
+        L.append(("H", "احتمال ادعای پزشکی/اغراق‌آمیز؛ بخوانید و اگر مشکل نیست در بخش «یافته‌های کنترل کیفیت» تیک «عبور» بزنید یا جمله را حذف کنید: " + "، ".join(med)))
     nums = re.findall(r"[^.\n]*\d[\d.,٫]*\s*(?:درصد|٪|%|گرم|کیلو|میلی‌گرم|برابر|سال)[^.\n]*", t.translate(DIGITS))
     if nums:
         L.append(("M", f"{len(nums)} جمله عدد/آمار دارد؛ درستی را بررسی کنید: «{nums[0].strip()[:70]}»"))
@@ -631,7 +667,9 @@ def similarity_flags(job, warn=0.12, bad=0.30):
         if r >= warn:
             res.append((r, title))
     res.sort(reverse=True)
-    return [("H" if r >= bad else "M", f"شباهت متنی {r * 100:.0f}٪ با مقالهٔ موجود «{title}»؛ برای یونیک بودن بخش‌های مشابه را بازنویسی کنید") for r, title in res[:3]]
+    ok = set(job.get("qc_ok") or [])
+    return [("H" if r >= bad else "M", f"شباهت متنی {r * 100:.0f}٪ با مقالهٔ موجود «{title}»؛ برای یونیک بودن بخش‌های مشابه را بازنویسی کنید یا در «یافته‌های کنترل کیفیت» عبور بدهید")
+            for r, title in res[:3] if "sim:" + title not in ok]
 
 
 EEAT = ["هر ادعای مهم منبع یا توضیح روشن دارد؟", "یک نمونه یا تجربهٔ واقعی از فروشگاه/برداشت/بسته‌بندی در متن آمده؟", "نام برند و راه تماس در صفحه یا پاورقی سایت هست؟",
@@ -1149,6 +1187,56 @@ def strip_foreign_links(text):
     return re.sub(r"(?<![(\w/])(?:https?://|www\.)[^\s)\]<>]+", "", t)
 
 
+LINK_FULL = re.compile(r"(?<!!)\[([^\]]*)\]\(\s*([^)\s]+)[^)]*\)")
+
+
+def existing_links(job):
+    """Every link that is in the text now, with what it points to (code): -> [{i, anchor, url, kind, title, flags}]. flags: oos, external, dup."""
+    host = brand_info()["host"].lower().removeprefix("www.")
+    by = {}
+    for d in kw.build_docs():
+        if d.get("url"):
+            by.setdefault(unquote(urlparse(d["url"]).path).rstrip("/"), d)
+    out, seen = [], {}
+    for i, m in enumerate(LINK_FULL.finditer(job.get("text") or "")):
+        a, u = m.group(1), m.group(2)
+        h = urlparse(u if "//" in u else "//" + u).netloc.lower().removeprefix("www.")
+        ext = not (u.startswith(("/", "#")) or h == host)
+        d = None if ext else by.get(unquote(urlparse(u).path).rstrip("/"))
+        flags = []
+        if ext:
+            flags.append("external")
+        if d and d["kind"] == "product" and d.get("oos"):
+            flags.append("oos")
+        if u in seen:
+            flags.append("dup")
+        seen[u] = True
+        out.append({"i": i, "anchor": a, "url": u, "kind": (d or {}).get("kind", "external" if ext else "unknown"), "title": (d or {}).get("title", ""), "flags": flags})
+    return out
+
+
+def remove_links(job, idxs):
+    """Unlink the chosen links (the anchor text stays). -> number removed"""
+    idxs, n = set(idxs), [0]
+
+    def rep(m):
+        n[0] += 1
+        return m.group(1)
+    cnt = [-1]
+
+    def pick(m):
+        cnt[0] += 1
+        return rep(m) if cnt[0] in idxs else m.group(0)
+    new = LINK_FULL.sub(pick, job["text"])
+    if n[0]:
+        snapshot(job, f"حذف {n[0]} لینک از متن")
+        job["text"] = new
+        job["links"] = []
+        mark_dirty(job)
+        save(job)
+    return n[0]
+
+
 def md_links(text):
     return set(re.findall(r"(?<!!)\]\(\s*([^)\s]+)", text or ""))
 
@@ -1536,7 +1624,9 @@ def update_post(job, go, ok_terms=(), overwrite=False, live_ok=False):
     _upload_all(job, c, prepared)
     sc = schema_html(job)
     meta = {k: v for k, v in (("_yoast_wpseo_focuskw", b["k"]), ("_yoast_wpseo_title", b["t"]), ("_yoast_wpseo_metadesc", b["m"])) if v}
-    payload = {"title": job["title"], "content": to_html(job, _figures(job)) + ("\n" + sc if sc else ""), "excerpt": b.get("x", ""), "meta": meta}
+    payload = {"title": job["title"], "content": to_html(job, _figures(job)) + ("\n" + sc if sc else ""), "meta": meta}
+    if b.get("x"):                                                  # an empty excerpt must never erase the one on the site
+        payload["excerpt"] = b["x"]
     if ids["category"]:
         payload["categories"] = ids["category"]
     if ids["post_tag"]:
@@ -1595,3 +1685,124 @@ def pull_from_site(job, go):
     _note(job, "pulled from site")
     save(job)
     print("نسخهٔ سایت دریافت شد. کنترل کیفیت و بریف را ببینید (کلمه کلیدی، عنوان سئو و متا از سایت خوانده نمی‌شوند و همان‌هایی که در بریف هست می‌ماند).")
+
+
+# ================================================================== 8) EXISTING articles: open one for AI editing (stage 7), version diff, refresh plan
+import difflib  # noqa: E402
+
+CORE_BLOCKS = {"paragraph", "heading", "list", "list-item", "image", "table", "quote", "separator", "spacer", "html"}
+
+
+def fidelity_warnings(raw):
+    """What an HTML -> Markdown -> HTML round trip would lose from this post. Empty list = safe."""
+    w = []
+    blocks = sorted({b for b in re.findall(r"<!--\s*wp:([a-z0-9/_-]+)", raw or "") if b.split("/")[-1] not in CORE_BLOCKS})
+    if blocks:
+        w.append("بلوک‌های ویژهٔ وردپرس: " + "، ".join(blocks[:5]))
+    if re.search(r"\[[a-z_]{3,}[^\]]*\]", re.sub(r"<[^>]+>", "", raw or "")):
+        w.append("شورت‌کد وردپرس در متن هست")
+    for tag in ("iframe", "form", "script", "style", "video", "audio", "button", "svg"):
+        if re.search(rf"<{tag}\b", raw or "", re.I):
+            w.append(f"تگ <{tag}> در متن هست")
+    n_div = len(re.findall(r"<div\b(?![^>]*(?:zaf-table|zaf-faq))", raw or ""))
+    if n_div:
+        w.append(f"{n_div} ساختار div سفارشی (ویجت/چیدمان قالب)")
+    return w
+
+
+def find_job_for_post(pid):
+    for f in sorted(DRAFTS.glob("a*/job.json")) if DRAFTS.exists() else []:
+        try:
+            j = json.loads(f.read_text(encoding="utf-8"))
+        except ValueError:
+            continue
+        if str((j.get("wp") or {}).get("id")) == str(pid):
+            return j
+    return None
+
+
+def import_existing(pid, go, ok_fidelity=False, why=""):
+    """Open a post that is ALREADY on the site as a job, so every editing tool (SEO re-ask, outline, rewrite, AI links, update with preview/backup) works on it.
+    Reads the site only. Never changes it."""
+    from .htmlmd import html_to_md
+    c = get_client()
+    cur = _remote(c, pid)
+    raw = SCHEMA_LEFT.sub("", (cur.get("content") or {}).get("raw") or "")
+    title = ((cur.get("title") or {}).get("raw") or "").strip()
+    warn = fidelity_warnings(raw)
+    words = len(re.sub(r"<[^>]+>", " ", raw).split())
+    print(f"مقالهٔ سایت (id {pid}): «{title}» — {words} کلمه، وضعیت {cur.get('status')}")
+    for x in warn:
+        print(f"  ⚠ {x}")
+    if warn:
+        print("  با ویرایش در این برنامه، متن از Markdown دوباره ساخته می‌شود؛ موارد بالا ممکن است ساده یا حذف شوند. پیش از ارسال به سایت «پیش‌نمایش به‌روزرسانی» را ببینید؛ نسخهٔ سایت همیشه پشتیبان‌گیری می‌شود.")
+    old = find_job_for_post(pid)
+    if old:
+        print(f"این مقاله از قبل پروندهٔ ویرایش دارد ({old['id']}).")
+        return old
+    if not go:
+        print("\nPreview only. Nothing created.")
+        return None
+    if warn and not ok_fidelity:
+        raise StepError("این مقاله ساختار ویژه دارد؛ تیک «می‌دانم ساده می‌شود» را بزنید.")
+    text = fix_text(html_to_md(raw))
+    art = next((a for a in read_articles() if str(a.get("id")) == str(pid)), {})
+    job = new_job(title or art.get("title", f"مقالهٔ {pid}"), note=why, source="import")
+    cats = art.get("categories") or []
+    job["brief"] = {"cat": cats[0] if cats else "", "new_cat": None, "slug": cur.get("slug") or art.get("slug", ""), "tags": list(art.get("tags") or [])[:8], "new_tags": [], "k": str(art.get("focus_keyword") or ""),
+                    "t": str(art.get("seo_title") or ""), "m": str(art.get("meta_description") or ""), "x": ((cur.get("excerpt") or {}).get("raw") or "").strip(), "h": outline_from_text(text),
+                    "img": [], "schema": False, "existing_only": True, "avoid": []}
+    job["text"], job["base_text"], job["imported"], job["fidelity"] = text, text, True, warn
+    job["wp"] = {"id": pid, "link": cur.get("link", ""), "status": cur.get("status", "publish"), "modified": cur.get("modified_gmt") or ""}
+    job["state"] = "published" if cur.get("status") == "publish" else "draft"
+    job["dirty"] = False
+    sync_parts_from_text(job, add=True)
+    job["brief"]["avoid"] = [d["title"] for d in ranked_docs(job, ("article",), 40)]
+    _note(job, "imported from site")
+    save(job)
+    print(f"پروندهٔ ویرایش ساخته شد ({job['id']}). چیزی روی سایت تغییر نکرد.")
+    return job
+
+
+def text_diff(old, new, limit=40):
+    """Paragraph-level difference: -> {"words": (old, new), "heads_added", "heads_removed", "changes": [("+"|"-", text)], "same": bool}"""
+    a = [p.strip() for p in re.split(r"\n\n+", old or "") if p.strip()]
+    b = [p.strip() for p in re.split(r"\n\n+", new or "") if p.strip()]
+    ch = []
+    for op in difflib.SequenceMatcher(None, a, b, autojunk=False).get_opcodes():
+        if op[0] != "equal":
+            ch += [("-", x) for x in a[op[1]:op[2]]] + [("+", x) for x in b[op[3]:op[4]]]
+    ha, hb = re.findall(r"(?m)^#{2,3}\s+(.+?)\s*$", old or ""), re.findall(r"(?m)^#{2,3}\s+(.+?)\s*$", new or "")
+    return {"words": (len((old or "").split()), len((new or "").split())), "heads_added": [h for h in hb if h not in ha], "heads_removed": [h for h in ha if h not in hb],
+            "changes": ch[:limit], "n_changes": len(ch), "same": not ch}
+
+
+PLAN_SYS = ("تو سردبیر سئوی فارسی «زعفران مارکت» (فروشگاه زعفران) هستی. این مقالهٔ منتشرشده افت کرده یا قدیمی است. بر اساس عنوان، کلمهٔ کلیدی، فهرست تیترها، شروع متن، دلیل‌های افت (why)، جست‌وجوهای واقعی مرتبط (q) "
+            "و عنوان مقاله‌های موجود سایت (existing)، فقط یک شیء JSON بده (بدون ``` و توضیح): {\"issues\": [حداکثر ۵ مشکل محتمل: بخش کهنه، کم‌عمق، نبود پاسخ مستقیم به نیت جست‌وجو، نبود FAQ و مانند آن], "
+            "\"actions\": [حداکثر ۶ کار مشخص مثل «بخش X را با ... بازنویسی کن»، «یک بخش سوالات متداول با این پرسش‌ها اضافه کن: ...»], \"instruction\": یک دستور فارسی کامل و قابل‌اجرا برای ابزار بازنویسی}. "
+            "هیچ متن مقاله‌ای ننویس؛ عدد و آمار و ادعای تازه نساز؛ فقط پیشنهاد مبتنی بر دادهٔ داده‌شده؛ هم‌پوشانی با existing نداشته باش. " + QUALITY)
+
+
+def refresh_plan(job, go, why=""):
+    _need_text(job)
+    c = llm.cfg()
+    intro, secs = split_text(job["text"])
+    b = job["brief"]
+    user = {"title": job["title"], "k": b.get("k", ""), "why": " ".join(str(why or job.get("note", "")).split())[:400], "outline": [{"h": h, "s": H3_RE.findall(body), "start": " ".join(IMG_RE.sub("", body).split())[:100]} for h, body in secs],
+            "intro": " ".join(intro.split())[:500], "q": related_queries(job["title"] + " " + b.get("k", "")), "existing": [d["title"] for d in ranked_docs(job, ("article",), 40)]}
+    msgs = _mj(PLAN_SYS, user)
+    if not _gate(c, [msgs], 900, go, "پیشنهاد به‌روزرسانی مقاله با AI"):
+        return
+    text, info = llm.chat(msgs, max_out=900, task="refresh_plan")
+    r = llm.parse_json_obj(text)
+    plan = {"issues": [str(x)[:200] for x in (r.get("issues") or [])][:5], "actions": [str(x)[:260] for x in (r.get("actions") or [])][:6], "instruction": " ".join(str(r.get("instruction", "")).split())[:1500]}
+    if not (plan["actions"] or plan["instruction"]):
+        raise ValueError("AI پیشنهاد قابل‌استفاده‌ای نداد؛ دوباره امتحان کنید.")
+    job["refresh_plan"] = plan
+    _cost(job, info)
+    _note(job, f"refresh plan ${info['cost']:.4f}")
+    save(job)
+    print(f"پیشنهاد AI (هزینه ${info['cost']:.4f}):")
+    print("مشکل‌های محتمل: " + "؛ ".join(plan["issues"]))
+    print("\n".join(f"  - {x}" for x in plan["actions"]))
+    print("دستور آمادهٔ بازنویسی در کادر «پ) بازنویسی» پر شده است؛ بخوانید، ویرایش کنید و اجرا کنید.")

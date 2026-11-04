@@ -169,10 +169,35 @@ def _text_and_qc(P, j, hid, act, js):
     lab = {"H": "جدی", "M": "متوسط", "L": "کم", "OK": "✓"}
     t = ("<h3>کنترل کیفیت (با کد)</h3><div class='box'>" + "".join(f"<div><b style='color:{col[s]}'>[{lab[s]}]</b> {E(x)}</div>" for s, x in q)
          + "<hr><span class='muted'>چک‌لیست E-E-A-T (دستی):</span><br>" + "<br>".join("☐ " + E(x) for x in ag.EEAT) + "</div>")
+    t += _qc_findings(P, j, hid)
     t += ("<h3>متن مقاله (قابل ویرایش؛ Markdown؛ <code>[[IMG:n]]</code> جای تصویر است)</h3>"
           + P.form("/writeact", hid + f"<textarea name='text' style='direction:rtl;min-height:420px'>{E(j['text'])}</textarea><br>"
                    f"<span class='muted'>{ag.words_of(j['text'])} کلمه</span><br>" + P.btn("save_text", "ذخیرهٔ متن (و اجرای دوبارهٔ پاک‌سازی و کنترل)", "alt")))
     return t
+
+
+def _qc_findings(P, j, hid):
+    """Sensitive words / similar articles shown with their sentence; the user decides: pass (not a problem) or delete the sentence."""
+    E = P.E
+    f = ag.med_findings(j["text"])
+    ok = set(j.get("qc_ok") or [])
+    sims = [(x.split("«")[1].split("»")[0], x) for s, x in ag.qc(j) if x.startswith("شباهت متنی") and "«" in x]
+    if not f and not ok and not sims:
+        return ""
+    rows = ""
+    for i, x in enumerate(f):
+        off = x["word"] in ok
+        cell = "<span class='muted'>عبور داده شده</span>" if off else f"<label><input type='checkbox' name='qd' value='{E(x['word'])}'> عبور (مشکل نیست)</label>"
+        rows += f"<tr><td><input type='checkbox' name='qx' value='{i}'></td><td><b>{E(x['word'])}</b></td><td>…{E(x['ctx'])}…</td><td>{cell}</td></tr>"
+    for title, msg in sims:
+        rows += f"<tr><td></td><td><b>شباهت</b></td><td>{E(msg)}</td><td><label><input type='checkbox' name='qd' value='sim:{E(title)}'> عبور</label></td></tr>"
+    t = ("<h3>یافته‌های کنترل کیفیت (تصمیم با شماست)</h3><div class='box'><p class='muted'>کد فقط حدس می‌زند. «عبور» یعنی این مورد برای همین مقاله مشکل حساب نشود (دیگر جلوی ارسال را نمی‌گیرد)؛ "
+         "«حذف جمله» جملهٔ مشکوک را از متن برمی‌دارد.</p>")
+    t += P.form("/writeact", hid + f"<table><tr><th>{P.selall('qx')}</th><th>عبارت</th><th>جمله</th><th>عبور</th></tr>{rows}</table>"
+                + P.btn("qc_apply", "اعمال انتخاب‌ها", "alt"))
+    if ok:
+        t += P.form("/writeact", hid + "عبورهای ثبت‌شده: " + "، ".join(E(x) for x in sorted(ok)) + " " + P.btn("qc_reset", "لغو همهٔ عبورها", "alt"))
+    return t + "</div>"
 
 
 def _links_box(P, j, hid, act):
@@ -186,9 +211,22 @@ def _links_box(P, j, hid, act):
                        + P.btn("links_skip", "رد همهٔ پیشنهادها", "alt")))
     else:
         t += "پیشنهاد بازی نیست. " + P.form("/writeact", hid + P.btn("links_find", "جست‌وجوی دوبارهٔ جای لینک (بعد از ویرایش متن)", "alt"))
+    t += _existing_links(P, j, hid)
     t += ("<hr><b>پیشنهاد لینک داخلی با AI</b> (فهرست عنوان‌های مقاله‌ها، دسته‌ها و محصولات سایت به AI داده می‌شود؛ AI مقصد و عبارت را انتخاب می‌کند و کد هر پیشنهاد را راستی‌آزمایی می‌کند):"
           + P.form("/writeact", hid + "حداکثر <input name='maxl' value='6' size='2' style='width:50px'> لینک " + P.btn("links_ai_est", "برآورد هزینه", "alt") + P.confirm_box("ai") + P.btn("links_ai", "پیشنهاد لینک با AI")))
     return t + "<span class='muted'>فقط روی عبارتی که از قبل در متن است؛ هر مقصد حداکثر یک بار؛ زیر تیتر و داخل لینک نمی‌رود. بعد از نوشتن متن خودکار پیشنهاد داده می‌شود؛ به سایت چیزی نمی‌رود.</span></div>"
+
+
+def _existing_links(P, j, hid):
+    E = P.E
+    L = ag.existing_links(j)
+    FL = {"oos": ("ناموجود", "#b3261e"), "external": ("بیرونی", "#a65f00"), "dup": ("تکراری", "#6b5b4b")}
+    if not L:
+        return "<hr><b>لینک‌های موجود در متن:</b> <span class='muted'>هنوز لینکی در متن نیست.</span>"
+    rows = "".join(f"<tr><td><input type='checkbox' name='rm' value='{x['i']}' {'checked' if 'oos' in x['flags'] else ''}></td><td>{E(x['anchor'])}</td><td>{P.link(x['url'], x['title'] or x['url'])} "
+                   f"<span class='muted'>({E(ag.LINK_KINDS.get(x['kind'], x['kind']))})</span> " + " ".join(f"<b style='color:{FL[f][1]}'>[{FL[f][0]}]</b>" for f in x["flags"]) + "</td></tr>" for x in L)
+    return ("<hr><b>لینک‌های موجود در متن (" + str(len(L)) + ")</b> — تیک بزنید و حذف کنید؛ متن لینک‌شده می‌ماند و فقط خود لینک برداشته می‌شود. لینک به محصول ناموجود از قبل تیک خورده است."
+            + P.form("/writeact", hid + f"<table><tr><th>{P.selall('rm')}</th><th>متن لینک</th><th>مقصد</th></tr>{rows}</table>" + P.btn("links_remove", "حذف لینک‌های تیک‌خورده از متن", "alt")))
 
 
 def _send_box(P, j, hid, act):
@@ -258,6 +296,25 @@ def _revise_box(P, j, hid):
         u = j["undo"][-1]
         t += ("<div class='box'>" + form("/writeact", hid + f"آخرین نقطهٔ برگشت: <b>{E(u['why'])}</b> ({E(u['when'])}) · " + btn("undo", "برگرداندن آخرین تغییر AI", "alt")) + "</div>")
     ai = lambda est, go, label: btn(est, "برآورد هزینه", "alt") + cb("ai") + btn(go, label)
+    # (0) existing article: what changed vs the version when it was opened + AI refresh plan
+    if j.get("base_text") is not None:
+        d = ag.text_diff(j["base_text"], j["text"])
+        t += "<div class='box'><b>تفاوت با نسخهٔ زمان باز کردن پرونده</b>"
+        if d["same"]:
+            t += " — هنوز تغییری نداده‌اید."
+        else:
+            t += (f" — کلمه: {d['words'][0]} ← {d['words'][1]} · تیتر اضافه: {E('، '.join(d['heads_added']) or '-')} · تیتر حذف: {E('، '.join(d['heads_removed']) or '-')} · {d['n_changes']} بند تغییر کرده"
+                  "<div style='max-height:260px;overflow:auto;margin-top:6px'>" + "".join(f"<div style='padding:3px 6px;margin:2px 0;border-radius:4px;background:{'#e6f4ea' if s == '+' else '#fdecea'}'>{s} {E(x[:300])}</div>" for s, x in d["changes"]) + "</div>")
+        t += "</div>"
+    if j.get("imported"):
+        pl = j.get("refresh_plan")
+        t += ("<div class='box'><b>پیشنهاد AI برای به‌روزرسانی این مقاله</b> (فقط پیشنهاد می‌دهد؛ متنی نمی‌نویسد)"
+              + form("/writeact", hid + "<input name='why' placeholder='توضیح اختیاری، مثلاً: افت کلیک بعد از بروزرسانی گوگل' style='width:75%'><br>" + ai("plan_est", "plan_ai", "پیشنهاد به‌روزرسانی")))
+        if pl:
+            t += "<div>مشکل‌های محتمل: " + E("؛ ".join(pl["issues"])) + "</div><ul>" + "".join(f"<li>{E(x)}</li>" for x in pl["actions"]) + "</ul>"
+        t += "</div>"
+        if j.get("fidelity"):
+            t += "<div class='box' style='border-color:#a65f00'>⚠ ساختار ویژهٔ این مقاله ممکن است هنگام ارسال ساده شود: " + E("؛ ".join(j["fidelity"])) + "</div>"
     # (a) SEO
     chk = "".join(f"<label style='margin-left:14px'><input type='checkbox' name='w' value='{k}' {'checked' if k != 'title' else ''}> {E(v)}</label>" for k, v in ag.SEO_FIELDS.items())
     t += ("<div class='box'><b>الف) پرسیدن دوبارهٔ سئو از AI</b> (بر اساس متن واقعی مقاله و جست‌وجوهای واقعی؛ هم‌نوع‌خواری با مقاله‌های دیگر کنترل می‌شود)"
@@ -270,7 +327,7 @@ def _revise_box(P, j, hid):
     picks = "".join(f"<label style='display:block'><input type='checkbox' name='sec' value='{E(h)}'> {E(h)}</label>" for h, _ in secs)
     t += ("<div class='box'><b>پ) بازنویسی با دستور دلخواه</b> (متن، لینک‌های داخلی و جای تصویرها حفظ می‌شود؛ دو بخش در هر تماس)"
           + form("/writeact", hid + f"<select onchange=\"this.form.instruction.value=this.value\">{pre}</select><br>"
-                 "<textarea name='instruction' rows='3' style='min-height:70px;direction:rtl' placeholder='مثلاً: بخش‌های ضعیف را یونیک‌تر و کاربردی‌تر بنویس، مثال بیشتر بیاور'></textarea><br>"
+                 f"<textarea name='instruction' rows='3' style='min-height:70px;direction:rtl' placeholder='مثلاً: بخش‌های ضعیف را یونیک‌تر و کاربردی‌تر بنویس، مثال بیشتر بیاور'>{E((j.get('refresh_plan') or {}).get('instruction', ''))}</textarea><br>"
                  "<label><input type='radio' name='scope' value='all' checked> کل مقاله</label> <label><input type='radio' name='scope' value='intro'> فقط مقدمه</label> "
                  f"<label><input type='radio' name='scope' value='pick'> فقط بخش‌های تیک‌خورده:</label>{P.selall('sec')}<div style='margin-right:18px'>{picks}</div>" + ai("rewrite_est", "rewrite_ai", "بازنویسی")) + "</div>")
     # (d) update site
@@ -332,7 +389,7 @@ def post(path, f, sure, run, sure_site=False):
         return "page", list_page("پروندهٔ مقاله پیدا نشد.")
     do = one("do")
     page = lambda out="": ("page", job_page(job["id"], out))
-    NEEDS_AI, NEEDS_SITE = {"brief", "write", "write_redo", "seo_ai", "outline_ai", "rewrite_ai", "links_ai"}, {"draft_make", "img_go", "pub_go", "update_go"}
+    NEEDS_AI, NEEDS_SITE = {"brief", "write", "write_redo", "seo_ai", "outline_ai", "rewrite_ai", "links_ai", "plan_ai"}, {"draft_make", "img_go", "pub_go", "update_go"}
     if do in NEEDS_AI and not sure:
         return page("اجرا نشد: تیک مصرف اعتبار AI را بزنید.")
     if do in NEEDS_SITE and not sure:
@@ -365,6 +422,20 @@ def post(path, f, sure, run, sure_site=False):
     if do == "links_find":
         n = len(ag.suggest_links(job))
         return page(f"{n} جای لینک پیدا شد." if n else "جای مناسبی برای لینک داخلی پیدا نشد (ممکن است «خروجی مقاله‌ها» و «همگام‌سازی» لازم باشد).")
+    if do == "links_remove":
+        n = ag.remove_links(job, {int(x) for x in f.get("rm", []) if x.isdigit()})
+        return page(f"{n} لینک از متن برداشته شد (متن لینک‌شده ماند)." if n else "لینکی تیک نخورده بود.")
+    if do == "qc_apply":
+        idx = {int(x) for x in f.get("qx", []) if x.isdigit()}
+        n = ag.remove_sentences(job, idx) if idx else 0
+        if f.get("qd"):
+            job["qc_ok"] = sorted(set(job.get("qc_ok") or []) | set(f.get("qd", [])))
+            ag.save(job)
+        return page(f"{n} جمله حذف شد؛ {len(f.get('qd', []))} مورد عبور داده شد.")
+    if do == "qc_reset":
+        job["qc_ok"] = []
+        ag.save(job)
+        return page("همهٔ عبورها لغو شد.")
     if do == "links_skip":
         job["links"] = []
         ag.save(job)
@@ -384,6 +455,8 @@ def post(path, f, sure, run, sure_site=False):
         return page(run(lambda: ag.revise_outline(job, do == "outline_ai", one("note")), yes=(do == "outline_ai")))
     if do in ("rewrite_est", "rewrite_ai"):
         return page(run(lambda: ag.rewrite(job, do == "rewrite_ai", one("instruction"), one("scope", "all"), f.get("sec", [])), yes=(do == "rewrite_ai")))
+    if do in ("plan_est", "plan_ai"):
+        return page(run(lambda: ag.refresh_plan(job, do == "plan_ai", one("why")), yes=(do == "plan_ai")))
     if do in ("links_ai_est", "links_ai"):
         mx = one("maxl", "6")
         return page(run(lambda: ag.ai_links(job, do == "links_ai", int(mx) if mx.isdigit() else 6), yes=(do == "links_ai")))

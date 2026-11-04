@@ -462,3 +462,120 @@ def graph_page(output=""):
              f"<details class='box'><summary>محصولات موجود بدون لینک از مقاله ({len(res['products_unlinked'])})</summary>{tbl(res['products_unlinked'])}</details>"
              "<p class='muted'>گزارش کامل: reports\\link_graph.md و link_graph_nodes.csv</p>")
     return P.page("گراف لینک", body)
+
+
+# ------------------------------------------------------------------ stage 6: images, category texts, Schema (/media)
+def media_page(output=""):
+    P = _P()
+    from . import media_seo as ms
+    E, form, btn, link, cb = P.E, P.form, P.btn, P.link, P.confirm_box
+    body = ("<h1>تصاویر، متن دسته‌ها و Schema</h1><p class='muted'>ممیزی‌ها فقط می‌خوانند و رایگان‌اند. هر تغییر روی سایت: پیش‌نمایش ← تیک تأیید ← پشتیبان و ثبت در گزارش. "
+            "AI فقط یک‌جا (نوشتن توضیح دسته‌ها) و با برآورد هزینه و تیک جدا استفاده می‌شود.</p>")
+    if output:
+        body += P.out_box(output)
+    # ---- images
+    body += "<h2>۱) تصاویر کتابخانهٔ رسانه</h2>" + form("/mediaact", btn("audit_media", "ممیزی تصاویر (فقط می‌خواند)"))
+    m = ms.load_media()
+    if m:
+        cnt = m["counts"]
+        body += (f"<div class='box'>{m['total']} تصویر · بدون Alt: <b>{m['no_alt']}</b> · " + "، ".join(f"{E(ms.M_TXT[k])}: {v}" for k, v in sorted(cnt.items(), key=lambda x: -x[1]) if k != "m_no_alt")
+                 + ("" if m["has_size"] else " · ⚠ حجم فایل در دسترس نیست") + "<br><span class='muted'>کم‌کردن حجم و تبدیل به WebP را با افزونهٔ بهینه‌سازی تصویر انجام دهید؛ این برنامه فایل‌ها را دست نمی‌زند. گزارش کامل: reports\\media_audit.csv</span></div>")
+        worst = [r for r in m["items"] if any(s == "H" for s, _ in r["flags"])][:15]
+        if worst:
+            body += "<table><tr><th>تصویر</th><th>حجم</th><th>مشکل</th></tr>" + "".join(
+                f"<tr><td>{link(r['url'], r['url'].rsplit('/', 1)[-1])}</td><td>{round((r['size'] or 0) / 1024)} KB</td><td>{E('؛ '.join(ms.M_TXT[c] for _, c in r['flags']))}</td></tr>" for r in worst) + "</table>"
+        body += form("/mediaact", btn("alt_build", "ساخت پیشنهاد Alt از روی متن مقاله‌ها", "alt"))
+    al = ms.load_alt()
+    if al and al["items"]:
+        rows = "".join(f"<tr><td><input type='checkbox' name='alt' value='{r['id']}' checked></td><td>{link(r['url'], '#' + str(r['id']))}</td><td class='muted'>{E(r['cur'])}</td>"
+                       f"<td><input name='alt_{r['id']}' value='{E(r['new'])}' style='width:95%'><div class='muted'>{E(r['why'])} — {link(r['article_url'], r['article'])}</div></td></tr>" for r in al["items"][:100])
+        body += ("<h3>پیشنهاد Alt (ویرایش‌پذیر)</h3>" + form("/mediaact", f"<table><tr><th>{P.selall()}</th><th>تصویر</th><th>Alt فعلی</th><th>Alt پیشنهادی (زمینهٔ مقاله)</th></tr>{rows}</table>"
+                                                              + btn("alt_prev", "پیش‌نمایش", "alt") + "<br>" + cb() + btn("alt_go", "ثبت Alt تیک‌خورده‌ها در سایت", "warn")))
+    # ---- categories
+    body += "<h2>۲) متن دسته‌های محصول</h2>" + form("/mediaact", btn("cats_audit", "ممیزی دسته‌ها (فقط می‌خواند)"))
+    cats = ms.load_cats()
+    if cats:
+        rows = "".join(f"<tr><td>{link(x['link'], x['name'])}</td><td>{x['count']}</td><td>{x['words']}</td><td>{E('؛ '.join(ms.C_TXT[c] for _, c in x['flags']))}</td></tr>" for x in cats["items"] if x["flags"])
+        body += f"<table><tr><th>دسته</th><th>محصول</th><th>کلمه</th><th>مشکل</th></tr>{rows}</table>"
+        body += ("<div class='box'><b>نوشتن توضیح با AI</b> (یک تماس برای حداکثر ۱۲ دسته؛ فقط از نام دسته و نام محصولات واقعی آن؛ عدد و ویژگی ساختگی ممنوع)"
+                 + form("/mediaact", btn("cats_est", "برآورد هزینه", "alt") + cb("ai") + btn("cats_ai", "نوشتن با AI")) + "</div>")
+    dr = ms.load_cat_drafts()
+    if dr and dr["items"]:
+        rows = "".join(f"<tr><td><input type='checkbox' name='cat' value='{r['id']}' checked></td><td><b>{E(r['name'])}</b>" + (f"<div style='color:#a65f00'>⚠ {E('؛ '.join(r['flags']))}</div>" if r["flags"] else "")
+                       + f"</td><td><textarea name='cat_{r['id']}' rows='6' style='direction:rtl'>{E(r['new'])}</textarea></td></tr>" for r in dr["items"])
+        body += ("<h3>پیش‌نویس توضیح دسته‌ها (بخوانید، ویرایش کنید)</h3>" + form("/mediaact", f"<table><tr><th>{P.selall()}</th><th>دسته</th><th>متن</th></tr>{rows}</table>"
+                                                                    + btn("cats_prev", "پیش‌نمایش", "alt") + "<br>" + cb() + btn("cats_go", "ثبت توضیح تیک‌خورده‌ها در سایت", "warn")))
+    # ---- schema
+    body += "<h2>۳) اعتبارسنجی Schema (فقط بررسی)</h2><p class='muted'>نمونه‌ای از صفحه‌ها (صفحهٔ اصلی، ۱۲ مقالهٔ تازه، ۱۲ محصول) باز می‌شود و JSON-LD آن‌ها خوانده و کنترل می‌شود. تولید Schema با Yoast و ووکامرس است.</p>"
+    body += form("/mediaact", btn("schema_run", "بررسی Schema"))
+    sc = ms.load_schema()
+    if sc:
+        rows = "".join(f"<tr><td>{link(p['url'], p['url'].replace('https://', '')[:60])}</td><td>{E(p['kind'])}</td><td>" + "<br>".join(f"<b>[{E(ms.SEV[s])}]</b> {E(t)}" for s, t in p["issues"]) + "</td></tr>" for p in sc["pages"] if p["issues"])
+        body += (f"<div class='box'>{len(sc['pages'])} صفحه بررسی شد، {sum(1 for p in sc['pages'] if p['issues'])} صفحه مشکل دارد.</div>" + (f"<table><tr><th>صفحه</th><th>نوع</th><th>مشکل</th></tr>{rows}</table>" if rows else "<p>✓ مشکلی پیدا نشد.</p>"))
+    return P.page("تصاویر و دسته‌ها", body)
+
+
+# ------------------------------------------------------------------ stage 7: task queue + hand-off (/tasks), refresh + impact (/refresh)
+def tasks_page(output="", bundle=""):
+    P = _P()
+    from . import tasks as tk
+    E, form, btn = P.E, P.form, P.btn
+    q = tk.queue()
+    body = ("<h1>صف کار و گزارش خطا</h1><p class='muted'>از نتیجهٔ همهٔ مرحله‌ها (سلامت، گراف، Search Console، تقویم، تصاویر، پیش‌نویس‌ها) یک صف اولویت‌دار ساخته می‌شود. فقط می‌خواند و بدون AI است؛ "
+            "کاری که انجام دادید با «انجام شد» می‌رود و ۱۴ روز نمی‌آید، «۷ روز بعد» پنهانش می‌کند و «نادیده» برای همیشه.</p>")
+    if output:
+        body += P.out_box(output)
+    rows = ""
+    for t in q[:30]:
+        k = f"<input type='hidden' name='key' value='{E(t['key'])}'>"
+        rows += (f"<tr><td><b>{t['score']}</b></td><td><a href='{E(t['path'])}'>{E(t['title'])}</a><div class='muted'>{E(t['why'])}{(' · ' + E(t['effort'])) if t['effort'] else ''}</div></td><td>"
+                 + form("/tasksact", k + btn("done", "انجام شد", "alt") + btn("snoozed", "۷ روز بعد", "alt") + btn("dismissed", "نادیده", "alt")) + "</td></tr>")
+    body += (f"<h2>کارهای پیشنهادی ({len(q)})</h2>" + (f"<table><tr><th>اولویت</th><th>کار</th><th></th></tr>{rows}</table>" if rows else "<p>✓ کار باز نمانده است.</p>"))
+    hid = tk.hidden()
+    if hid:
+        body += ("<details class='box'><summary>پنهان‌شده‌ها (" + str(len(hid)) + ")</summary>" + "".join(
+            form("/tasksact", f"<input type='hidden' name='key' value='{E(h['key'])}'>{E(h['s'])} ({E(h['at'][:10])}) · {E(h['key'])} " + btn("reset", "برگردان", "alt")) for h in hid[:40]) + "</details>")
+    # notes
+    body += ("<h2>یادداشت: کار، خطا یا پیشنهاد</h2><p class='muted'>هر چیزی که می‌خواهید بعداً به توسعه‌دهنده (Claude) بدهید اینجا ثبت کنید. «کار من» در صف بالا می‌آید؛ «خطا» و «پیشنهاد» فقط در بستهٔ گزارش می‌روند.</p>"
+             + form("/tasksact", "<select name='kind'><option value='bug'>خطا</option><option value='idea'>پیشنهاد/کار تازه برای برنامه</option><option value='task'>کار من</option></select> "
+                    "<select name='prio'><option value='normal'>معمولی</option><option value='high'>مهم</option><option value='low'>کم‌اهمیت</option></select><br>"
+                    "<input name='title' placeholder='عنوان کوتاه' style='width:90%'><br><textarea name='note' rows='4' style='direction:rtl' placeholder='جزئیات: چه کردید، چه دیدید، چه انتظار داشتید'></textarea><br>" + btn("note_add", "ثبت")))
+    ns = tk.notes()
+    if ns:
+        rows = "".join(f"<tr><td>{E(tk.KINDS[m['kind']])}</td><td><b>{E(m['title'])}</b>{('<div class=muted>' + E(m['note']) + '</div>') if m['note'] else ''}</td><td class='muted'>{E(m['created'][:16])}</td><td>"
+                       + form("/tasksact", f"<input type='hidden' name='key' value='{m['key']}'><input type='hidden' name='v' value='{0 if m['done'] else 1}'>" + btn("note_done", "برگشت" if m["done"] else "انجام شد", "alt") + btn("note_del", "حذف", "alt"))
+                       + f"</td></tr>" for m in ns)
+        body += f"<table><tr><th>نوع</th><th>یادداشت</th><th>زمان</th><th></th></tr>{rows}</table>"
+    body += ("<h2>بستهٔ گزارش برای توسعه‌دهنده</h2><p class='muted'>یادداشت‌ها، آخرین خطاهای پنل، انتهای لاگ روتین و آخرین تغییرهای سایت را در یک فایل می‌گذارد (کلید و رمز حذف می‌شود). فایل را همراه پروژه به Claude بدهید.</p>"
+             + form("/tasksact", btn("bundle", "ساخت بستهٔ گزارش")))
+    if bundle:
+        body += f"<textarea readonly rows='16' style='width:100%;direction:ltr;font-family:monospace' onclick='this.select()'>{E(bundle)}</textarea>"
+    return P.page("صف کار", body)
+
+
+def refresh_page(output=""):
+    P = _P()
+    from . import tracker as tr
+    E, form, btn, link, edit = P.E, P.form, P.btn, P.link, P.edit_link
+    body = ("<h1>به‌روزرسانی محتوا و پایش اثر</h1><p class='muted'>فقط می‌خواند. افت از مقایسهٔ دو خروجی هم‌اندازهٔ Search Console (صفحهٔ Search Console) تشخیص داده می‌شود. «باز کردن برای ویرایش» مقاله را از سایت می‌خواند و پروندهٔ ویرایش می‌سازد "
+            "(بازنویسی با AI، لینک، سئو و ارسال با پیش‌نمایش تفاوت و پشتیبان)؛ چیزی روی سایت تغییر نمی‌کند.</p>")
+    if output:
+        body += P.out_box(output)
+    d = tr.decay()
+    body += "<h2>مقاله‌های افت‌کرده یا قدیمی</h2>" + (f"<div class='box'>{E(d['note'])}</div>" if d["note"] else "")
+    if d["items"]:
+        rows = "".join(f"<tr><td>{link(x['url'], x['title'])}{edit(x['url'], x['id'])}</td><td>{E('؛ '.join(x['reasons']))}</td><td>"
+                       + form("/refreshact", f"<input type='hidden' name='id' value='{x['id']}'><input type='hidden' name='why' value='{E('؛ '.join(x['reasons']))}'>" + btn("import_prev", "پیش‌نمایش", "alt")
+                              + "<label><input type='checkbox' name='okfid' value='1'> ساختار ویژه ساده شود</label> " + btn("import_go", "باز کردن برای ویرایش")) + "</td></tr>" for x in d["items"][:30])
+        body += f"<table><tr><th>مقاله</th><th>چرا</th><th></th></tr>{rows}</table>"
+    elif not d["note"]:
+        body += "<p>✓ مقالهٔ افت‌کرده‌ای پیدا نشد.</p>"
+    body += "<h2>اثر تغییرهای انجام‌شده (قبل و بعد در Search Console)</h2><p class='muted'>برای قضاوت به یک خروجی که پیش از تغییر تمام شده و یک خروجی که پس از تغییر شروع شده نیاز است؛ نسبت به کل سایت سنجیده می‌شود. عددهای کوچک، فصل و تأخیر گوگل را در نظر بگیرید؛ این فقط نشانه است نه اثبات.</p>"
+    imp = tr.impact()
+    if imp:
+        rows = "".join(f"<tr><td class='muted'>{E(r['time'][:10])}</td><td>{E(r['label'])}</td><td>{link(r['url'], r['title'])}</td><td>" + (f"{r['before']['clicks_day']} ← {r['after']['clicks_day']} کلیک/روز · جایگاه {r['before']['pos']:.1f} ← {r['after']['pos']:.1f}" if r["before"] and r["after"] else "") +
+                       f"</td><td><b>{E(tr.VERDICT[r['verdict']])}</b></td></tr>" for r in imp[:60])
+        body += f"<table><tr><th>تاریخ</th><th>تغییر</th><th>صفحه</th><th>قبل ← بعد</th><th>نتیجه</th></tr>{rows}</table>"
+    else:
+        body += "<p>هنوز تغییری از طرف این برنامه ثبت نشده است.</p>"
+    return P.page("به‌روزرسانی و پایش اثر", body)

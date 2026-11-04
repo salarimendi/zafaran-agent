@@ -111,6 +111,13 @@ def run():
                 L.append(f"- {r['name']}: {r['jalali']}{' (تقریبی)' if r['approx'] else ''} ({r['days']} روز دیگر)؛ انتشار تا {r['publish_jalali']}{have}")
     except Exception as e:  # the calendar must never break the routine
         L.append(f"- تقویم محتوا: خطا ({type(e).__name__})")
+    try:
+        from . import tasks as _tk
+        top = _tk.queue()[:8]
+        if top:
+            L += ["", "## صف کار پیشنهادی (اولویت‌دار)"] + [f"- [{t['score']}] {t['title']} — {t['why']}" for t in top]
+    except Exception as e:  # the queue must never break the routine
+        L.append(f"- صف کار: خطا ({type(e).__name__})")
     pend_p = [d for d in (ROOT / "inbox" / "products").glob("*") if d.is_dir() and not d.name.startswith("_") and not (d / "result.json").exists()]
     pend_a = [f for f in (ROOT / "inbox" / "articles").glob("*.md") if not f.name.startswith("_") and not f.with_suffix(".result.json").exists()]
     L += ["", "## منتظر شما", f"- محصول در inbox ارسال‌نشده: {len(pend_p)}", f"- مقاله در inbox ارسال‌نشده: {len(pend_a)}"]
